@@ -1,0 +1,11 @@
+[package]
+name = "phase"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitflags = "2.10"
+
+[dependencies.mips]
+#git = "https://github.com/coopersimon/e-mips"
+path = "../../e-mips"
