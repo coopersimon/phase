@@ -1,4 +1,5 @@
 use mips::coproc::Coprocessor;
+use crate::utils::bits::*;
 
 pub struct GTE {
     regs:           [u32; 32],
@@ -39,12 +40,506 @@ impl Coprocessor for GTE {
         self.regs[reg] = data;
     }
 
-    fn operation(&mut self, op: u32) {
-        
+    fn operation(&mut self, instr: u32) {
+        let op = {
+            const MASK: u32 = 0x3F;
+            (instr & MASK) as u8
+        };
+        // If bit 19 is set, shift left by 12.
+        let shift = || -> u8 {
+            const MASK: u32 = 0x0008_0000;
+            const SHIFT: usize = 19 - 12;
+            ((instr & MASK) >> SHIFT) as u8
+        };
+        let mul_mat = || -> u8 {
+            const MASK: u32 = 0x0006_0000;
+            const SHIFT: usize = 17;
+            ((instr & MASK) >> SHIFT) as u8
+        };
+        let mul_vec = || -> u8 {
+            const MASK: u32 = 0x0001_8000;
+            const SHIFT: usize = 15;
+            ((instr & MASK) >> SHIFT) as u8
+        };
+        let trans_vec = || -> u8 {
+            const MASK: u32 = 0x0000_6000;
+            const SHIFT: usize = 13;
+            ((instr & MASK) >> SHIFT) as u8
+        };
+        let ir_unsigned = || -> bool {
+            const MASK: u32 = 0x0000_0400;
+            const SHIFT: usize = 10;
+            ((instr & MASK) >> SHIFT) == 1
+        };
+        match op {
+            0x01 => self.rtps(shift(), ir_unsigned()),
+            0x06 => self.nclip(),
+            0x0C => self.op(),
+            0x10 => self.dpcs(),
+            0x11 => self.intpl(),
+            0x12 => self.mvmva(),
+            0x13 => self.ncds(),
+            0x14 => self.cdp(),
+            0x16 => self.ncdt(),
+            0x1B => self.nccs(),
+            0x1C => self.cc(),
+            0x1E => self.ncs(),
+            0x20 => self.nct(),
+            0x28 => self.sqr(),
+            0x29 => self.dcpl(),
+            0x2A => self.dpct(),
+            0x2D => self.avsz3(),
+            0x2E => self.avsz4(),
+            0x30 => self.rtpt(shift(), ir_unsigned()),
+            0x3D => self.gpf(),
+            0x3E => self.gpl(),
+            0x3F => self.ncct(),
+            _ => {}, // Undefined
+        }
     }
 }
 
-// Internal commands.
+enum Reg {
+    VXY0,
+    VZ0,
+    VXY1,
+    VZ1,
+    VXY2,
+    VZ2,
+    RGBC,
+    OTZ,
+    IR0,
+    IR1,
+    IR2,
+    IR3,
+    SXY0,
+    SXY1,
+    SXY2,
+    SXYP,
+    SZ0,
+    SZ1,
+    SZ2,
+    SZ3,
+    RGB0,
+    RGB1,
+    RGB2,
+    RES1,
+    MAC0,
+    MAC1,
+    MAC2,
+    MAC3,
+    IRGB,
+    ORGB,
+    LZCS,
+    LZCR
+}
+
+impl Reg {
+    fn idx(self) -> usize {
+        self as usize
+    }
+}
+
+enum Control {
+    RT11_12,
+    RT13_21,
+    RT22_23,
+    RT31_32,
+    RT33,
+    TRX,
+    TRY,
+    TRZ,
+    L11_12,
+    L13_21,
+    L22_23,
+    L31_32,
+    L33,
+    RBK,
+    GBK,
+    BBK,
+    LR1R2,
+    LR3G1,
+    LG2G3,
+    LB1B2,
+    LB3,
+    RFC,
+    GFC,
+    BFC,
+    OFX,
+    OFY,
+    H,
+    DQA,
+    DQB,
+    ZSF3,
+    ZSF4,
+    FLAG
+}
+
+impl Control {
+    fn idx(self) -> usize {
+        self as usize
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    struct Flag: u32 {
+        const Checksum = bit!(31);
+        const MAC1PosOvf = bit!(30);
+        const MAC2PosOvf = bit!(29);
+        const MAC3PosOvf = bit!(28);
+        const MAC1NegOvf = bit!(27);
+        const MAC2NegOvf = bit!(26);
+        const MAC3NegOvf = bit!(25);
+        const IR1Sat = bit!(24);
+        const IR2Sat = bit!(23);
+        const IR3Sat = bit!(22);
+        const ColRSat = bit!(21);
+        const ColGSat = bit!(20);
+        const ColBSat = bit!(19);
+        const SZ3Sat = bit!(18);
+        const DivOvf = bit!(17);
+        const MAC0PosOvf = bit!(16);
+        const MAC0NegOvf = bit!(15);
+        const SXSat = bit!(14);
+        const SYSat = bit!(13);
+        const IR0Sat = bit!(12);
+    }
+}
+
+// Internal methods.
 impl GTE {
+    #[inline]
+    fn get_flag(&self) -> Flag {
+        Flag::from_bits_truncate(self.control_regs[Control::FLAG.idx()])
+    }
+
+    #[inline]
+    fn set_flag(&mut self, flag: Flag) {
+        self.control_regs[Control::FLAG.idx()] = flag.bits();
+    }
+
+    #[inline]
+    fn get_reg_i16_lo(&self, reg: Reg) -> i16 {
+        self.regs[reg.idx()] as i16
+    }
+
+    #[inline]
+    fn get_reg_i16_hi(&self, reg: Reg) -> i16 {
+        (self.regs[reg.idx()] >> 16) as i16
+    }
+
+    #[inline]
+    fn get_reg_i32(&self, reg: Reg) -> i32 {
+        self.regs[reg.idx()] as i32
+    }
+
+    #[inline]
+    fn get_control_i16_lo(&self, reg: Control) -> i16 {
+        self.control_regs[reg.idx()] as i16
+    }
+
+    #[inline]
+    fn get_control_i16_hi(&self, reg: Control) -> i16 {
+        (self.control_regs[reg.idx()] >> 16) as i16
+    }
+
+    #[inline]
+    fn get_control_i32(&self, reg: Control) -> i32 {
+        self.control_regs[reg.idx()] as i32
+    }
     
+    /// Rotate, translate, project for 1 vertex.
+    /// 
+    /// Returns divide value for use in depth queueing.
+    fn rtp(&mut self, shift: u8, ir_unsigned: bool, vx: i64, vy: i64, vz: i64) -> i64 {
+        use Reg::*;
+        use Control::*;
+        let mut control = self.get_flag();
+        // Shift stack.
+        self.regs[SZ0.idx()] = self.regs[SZ1.idx()];
+        self.regs[SZ1.idx()] = self.regs[SZ2.idx()];
+        self.regs[SZ2.idx()] = self.regs[SZ3.idx()];
+        self.regs[SXY0.idx()] = self.regs[SXY1.idx()];
+        self.regs[SXY1.idx()] = self.regs[SXY2.idx()];
+        let ir1 = {
+            let rt11 = self.get_control_i16_hi(RT11_12) as i64;
+            let rt12 = self.get_control_i16_lo(RT11_12) as i64;
+            let rt13 = self.get_control_i16_hi(RT13_21) as i64;
+            let trx = self.get_control_i32(TRX) as i64;
+            let mac1 = (trx << 12) + rt11 * vx + rt12 * vy + rt13 * vz;
+            control.set(Flag::MAC1PosOvf, mac1 > 0x7FF_FFFF_FFFF);
+            control.set(Flag::MAC1NegOvf, mac1 < -0x800_0000_0000);
+            let mac1 = (mac1 >> shift) as i32;
+            self.regs[MAC1.idx()] = mac1 as u32;
+            // TODO: reduce branches
+            let ir1 = if mac1 > 0x7FFF {
+                control.insert(Flag::IR1Sat);
+                0x7FFF_i16
+            } else if mac1 < -0x8000 {
+                control.set(Flag::IR1Sat, if ir_unsigned {mac1 < 0} else {true});
+                -0x8000_i16
+            } else {
+                mac1 as i16
+            };
+            self.regs[IR1.idx()] = ir1 as u32; // TODO: sign extend?
+            ir1 as i64
+        };
+        let ir2 = {
+            let rt21 = self.get_control_i16_lo(RT13_21) as i64;
+            let rt22 = self.get_control_i16_hi(RT22_23) as i64;
+            let rt23 = self.get_control_i16_lo(RT22_23) as i64;
+            let _try = self.get_control_i32(TRY) as i64;
+            let mac2 = (_try << 12) + rt21 * vx + rt22 * vy + rt23 * vz;
+            control.set(Flag::MAC2PosOvf, mac2 > 0x7FF_FFFF_FFFF);
+            control.set(Flag::MAC2NegOvf, mac2 < -0x800_0000_0000);
+            let mac2 = (mac2 >> shift) as i32;
+            self.regs[MAC2.idx()] = mac2 as u32;
+            let ir2 = if mac2 > 0x7FFF {
+                control.insert(Flag::IR2Sat);
+                0x7FFF_i16
+            } else if mac2 < -0x8000 {
+                control.set(Flag::IR2Sat, if ir_unsigned {mac2 < 0} else {true});
+                -0x8000_i16
+            } else {
+                mac2 as i16
+            };
+            self.regs[IR2.idx()] = ir2 as u32; // TODO: sign extend?
+            ir2 as i64
+        };
+        let sz3 = {
+            let rt31 = self.get_control_i16_hi(RT31_32) as i64;
+            let rt32 = self.get_control_i16_lo(RT31_32) as i64;
+            let rt33 = self.get_control_i16_hi(RT33) as i64;
+            let trz = self.get_control_i32(TRZ) as i64;
+            let mac3 = (trz << 12) + rt31 * vx + rt32 * vy + rt33 * vz;
+            control.set(Flag::MAC3PosOvf, mac3 > 0x7FF_FFFF_FFFF);
+            control.set(Flag::MAC3NegOvf, mac3 < -0x800_0000_0000);
+            let mac3 = (mac3 >> shift) as i32;
+            self.regs[MAC3.idx()] = mac3 as u32;
+            let ir3 = if mac3 > 0x7FFF {
+                control.insert(Flag::IR3Sat);
+                0x7FFF_i16
+            } else if mac3 < -0x8000 {
+                control.set(Flag::IR3Sat, if ir_unsigned {mac3 < 0} else {true});
+                -0x8000_i16
+            } else {
+                mac3 as i16
+            };
+            self.regs[IR3.idx()] = ir3 as u32; // TODO: sign extend?
+            let sz3 = mac3.clamp(0, 0xFFFF);
+            self.regs[SZ3.idx()] = sz3 as u32;
+            control.set(Flag::SZ3Sat, (mac3 as u32) > 0xFFFF);
+            sz3 as i64
+        };
+        let h = (self.control_regs[H.idx()] as u16) as i64;
+        // Unsigned divide
+        let div = if sz3 == 0 {
+            control.insert(Flag::DivOvf);
+            0x1_FFFF
+        } else {
+            let div = ((h << 17) / sz3 + 1) >> 1;
+            if div > 0x1_FFFF {
+                control.insert(Flag::DivOvf);
+                0x1_FFFF
+            } else {
+                div
+            }
+        };
+        let screen_x = {
+            let x_offset = self.get_control_i32(OFX) as i64;
+            let mac0 = div * ir1 + x_offset;
+            control.set(Flag::MAC0PosOvf, mac0 > 0x7FFF_FFFF);
+            control.set(Flag::MAC0NegOvf, mac0 < -0x8000_0000);
+            let screen_x = mac0 >> 16;
+            if screen_x > 0x3FF {
+                control.insert(Flag::SXSat);
+                0x3FF_i16
+            } else if screen_x < -0x400 {
+                control.insert(Flag::SXSat);
+                -0x400_i16
+            } else {
+                screen_x as i16
+            }
+        };
+        let screen_y = {
+            let y_offset = self.get_control_i32(OFY) as i64;
+            let mac0 = div * ir2 + y_offset;
+            control.set(Flag::MAC0PosOvf, mac0 > 0x7FFF_FFFF);
+            control.set(Flag::MAC0NegOvf, mac0 < -0x8000_0000);
+            let screen_y = mac0 >> 16;
+            if screen_y > 0x3FF {
+                control.insert(Flag::SYSat);
+                0x3FF_i16
+            } else if screen_y < -0x400 {
+                control.insert(Flag::SYSat);
+                -0x400_i16
+            } else {
+                screen_y as i16
+            }
+        };
+        self.regs[SXY2.idx()] = (screen_x as u32) | ((screen_y as u32) << 16);
+        self.set_flag(control);
+        div
+    }
+
+    fn depth_queue(&mut self, div: i64) {
+        use Reg::*;
+        use Control::*;
+        let mut control = self.get_flag();
+        let mac0 = {
+            let depth_queue_a = self.get_control_i16_lo(DQA) as i64;
+            let depth_queue_b = self.get_control_i32(DQB) as i64;
+            let mac0 = div * depth_queue_a + depth_queue_b;
+            control.set(Flag::MAC0PosOvf, mac0 > 0x7FFF_FFFF);
+            control.set(Flag::MAC0NegOvf, mac0 < -0x8000_0000);
+            mac0 as i32 // TODO: clip or shift by 12?
+        };
+        self.regs[MAC0.idx()] = mac0 as u32;
+        let ir0 = {
+            let ir0 = mac0 >> 12;
+            if ir0 > 0x1000 {
+                control.insert(Flag::IR0Sat);
+                0x1000_i16
+            } else if ir0 < 0 {
+                control.insert(Flag::IR0Sat);
+                0_i16
+            } else {
+                ir0 as i16
+            }
+        };
+        self.regs[IR0.idx()] = ir0 as u32;
+        self.set_flag(control);
+    }
+}
+
+// Commands.
+impl GTE {
+    /// Rotate, translate, perspective transformation (single).
+    fn rtps(&mut self, shift: u8, ir_unsigned: bool) {
+        use Reg::*;
+        let vx0 = self.get_reg_i16_lo(VXY0) as i64;
+        let vy0 = self.get_reg_i16_hi(VXY0) as i64;
+        let vz0 = self.get_reg_i16_lo(VZ0) as i64;
+        let div = self.rtp(shift, ir_unsigned, vx0, vy0, vz0);
+        self.depth_queue(div);
+    }
+
+    /// Rotate, translate, perspective transformation (triple).
+    fn rtpt(&mut self, shift: u8, ir_unsigned: bool) {
+        use Reg::*;
+        let vx0 = self.get_reg_i16_lo(VXY0) as i64;
+        let vy0 = self.get_reg_i16_hi(VXY0) as i64;
+        let vz0 = self.get_reg_i16_lo(VZ0) as i64;
+        self.rtp(shift, ir_unsigned, vx0, vy0, vz0);
+        let vx1 = self.get_reg_i16_lo(VXY1) as i64;
+        let vy1 = self.get_reg_i16_hi(VXY1) as i64;
+        let vz1 = self.get_reg_i16_lo(VZ1) as i64;
+        self.rtp(shift, ir_unsigned, vx1, vy1, vz1);
+        let vx2 = self.get_reg_i16_lo(VXY2) as i64;
+        let vy2 = self.get_reg_i16_hi(VXY2) as i64;
+        let vz2 = self.get_reg_i16_lo(VZ2) as i64;
+        let div = self.rtp(shift, ir_unsigned, vx2, vy2, vz2);
+        self.depth_queue(div);
+    }
+
+    /// Normal clipping.
+    fn nclip(&mut self) {
+
+    }
+
+    /// Outer product
+    fn op(&mut self) {
+
+    }
+
+    /// Depth cueing (single).
+    fn dpcs(&mut self) {
+
+    }
+
+    /// Depth cueing (triple).
+    fn dpct(&mut self) {
+
+    }
+
+    /// Interpolation.
+    fn intpl(&mut self) {
+
+    }
+
+    /// Multiply vector by matrix and add.
+    fn mvmva(&mut self) {
+
+    }
+
+    /// Normal color depth cue (single).
+    fn ncds(&mut self) {
+
+    }
+
+    /// Normal color depth cue (triple).
+    fn ncdt(&mut self) {
+
+    }
+
+    /// Color depth queue.
+    fn cdp(&mut self) {
+
+    }
+
+    /// Color color.
+    fn cc(&mut self) {
+
+    }
+
+    /// Normal color (single).
+    fn ncs(&mut self) {
+
+    }
+
+    /// Normal color (triple).
+    fn nct(&mut self) {
+
+    }
+
+    /// Normal color color (single).
+    fn nccs(&mut self) {
+
+    }
+
+    /// Normal color color (triple).
+    fn ncct(&mut self) {
+
+    }
+
+    /// Square IR.
+    fn sqr(&mut self) {
+
+    }
+
+    /// Depth cue color light.
+    fn dcpl(&mut self) {
+
+    }
+
+    /// Average 3 Z values.
+    fn avsz3(&mut self) {
+
+    }
+
+    /// Average 4 Z values.
+    fn avsz4(&mut self) {
+
+    }
+
+    /// General purpose interpolation.
+    fn gpf(&mut self) {
+
+    }
+
+    /// General purpose interpolation with base.
+    fn gpl(&mut self) {
+
+    }
 }
