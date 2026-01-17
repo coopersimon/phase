@@ -4,6 +4,14 @@ pub struct GTE {
 
 }
 
+impl GTE {
+    pub fn new() -> Self {
+        Self {
+            
+        }
+    }
+}
+
 impl Coprocessor for GTE {
     fn load_from_mem(&mut self, reg: usize, val: u32) {
         

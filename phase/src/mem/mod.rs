@@ -5,6 +5,14 @@ pub struct MemBus {
 
 }
 
+impl MemBus {
+    pub fn new() -> Self {
+        Self {
+            
+        }
+    }
+}
+
 impl Mem32 for MemBus {
     type Addr = u32;
     const LITTLE_ENDIAN: bool = true;
