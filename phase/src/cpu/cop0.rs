@@ -42,17 +42,18 @@ bitflags::bitflags! {
 }
 
 pub struct SystemCoproc {
-    exception_cause: ExceptionCause,
     system_status: SystemStatus,
+    exception_cause: ExceptionCause,
     exception_ret_addr: u32,
     bad_virtual_addr: u32,
 }
 
 impl SystemCoproc {
     pub fn new() -> Self {
+        let init_status = SystemStatus::BootExcVectors;
         Self {
+            system_status: init_status,
             exception_cause: ExceptionCause::empty(),
-            system_status: SystemStatus::empty(),
             exception_ret_addr: 0,
             bad_virtual_addr: 0,
         }
@@ -72,41 +73,6 @@ impl SystemCoproc {
         } else {
             false
         }
-    }
-}
-
-// Internal stuff
-impl SystemCoproc {
-    /// Return from Exception
-    fn rfe(&mut self) {
-        self.pop_int_stack();
-    }
-
-    /// Reserved.
-    fn reserved(&mut self) {
-        // TODO: trigger exception.
-    }
-
-    fn set_cause(&mut self, data: u32) {
-        self.exception_cause.remove(ExceptionCause::Writable);
-        let writable = ExceptionCause::from_bits_truncate(data) & ExceptionCause::Writable;
-        self.exception_cause.insert(writable);
-    }
-
-    fn set_status(&mut self, data: u32) {
-        self.system_status = SystemStatus::from_bits_truncate(data);
-    }
-
-    fn push_int_stack(&mut self) {
-        let stack = self.system_status & SystemStatus::IntStackTop;
-        self.system_status.remove(SystemStatus::IntStackBottom);
-        self.system_status.insert(SystemStatus::from_bits_truncate(stack.bits() << 2));
-    }
-
-    fn pop_int_stack(&mut self) {
-        let stack = self.system_status & SystemStatus::IntStackBottom;
-        self.system_status.remove(SystemStatus::IntStackTop);
-        self.system_status.insert(SystemStatus::from_bits_truncate(stack.bits() >> 2));
     }
 }
 
@@ -146,15 +112,56 @@ impl Coprocessor0 for SystemCoproc {
         }
     }
 
-    fn trigger_exception(&mut self, exception: mips::cpu::ExceptionCode, ret_addr: u32, bad_v_addr: u32) {
+    fn trigger_exception(&mut self, exception: &mips::coproc::Exception) -> u32 {
         use mips::cpu::ExceptionCode::*;
-        if exception == AddrErrorLoad || exception == AddrErrorStore {
-            self.bad_virtual_addr = bad_v_addr;
+        if exception.code == AddrErrorLoad || exception.code == AddrErrorStore {
+            self.bad_virtual_addr = exception.bad_virtual_addr;
         }
-        self.exception_ret_addr = ret_addr;
+        self.exception_ret_addr = exception.ret_addr;
         self.exception_cause.remove(ExceptionCause::ExCode);
-        let new_exception_cause = ExceptionCause::from_bits_truncate((exception as u32) << 2);
+        let new_exception_cause = ExceptionCause::from_bits_truncate((exception.code as u32) << 2);
         self.exception_cause.insert(new_exception_cause);
+        self.exception_cause.set(ExceptionCause::BranchDelay, exception.branch_delay);
         self.push_int_stack();
+        if self.system_status.contains(SystemStatus::BootExcVectors) {
+            0xBFC0_0180 // ROM
+        } else {
+            0x8000_0080 // RAM
+        }
+    }
+}
+
+// Internal stuff
+impl SystemCoproc {
+    /// Return from Exception
+    fn rfe(&mut self) {
+        self.pop_int_stack();
+    }
+
+    /// Reserved.
+    fn reserved(&mut self) {
+        // TODO: trigger exception.
+    }
+
+    fn set_cause(&mut self, data: u32) {
+        self.exception_cause.remove(ExceptionCause::Writable);
+        let writable = ExceptionCause::from_bits_truncate(data) & ExceptionCause::Writable;
+        self.exception_cause.insert(writable);
+    }
+
+    fn set_status(&mut self, data: u32) {
+        self.system_status = SystemStatus::from_bits_truncate(data);
+    }
+
+    fn push_int_stack(&mut self) {
+        let stack = self.system_status & SystemStatus::IntStackTop;
+        self.system_status.remove(SystemStatus::IntStackBottom);
+        self.system_status.insert(SystemStatus::from_bits_truncate(stack.bits() << 2));
+    }
+
+    fn pop_int_stack(&mut self) {
+        let stack = self.system_status & SystemStatus::IntStackBottom;
+        self.system_status.remove(SystemStatus::IntStackTop);
+        self.system_status.insert(SystemStatus::from_bits_truncate(stack.bits() >> 2));
     }
 }
