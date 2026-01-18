@@ -1,0 +1,284 @@
+use crate::{interrupt::Interrupt, utils::{bits::*, interface::MemInterface}};
+
+/// Timers for PSX.
+pub struct Timers {
+    timers: [Timer; 3],
+    in_hblank: bool,
+    in_vblank: bool,
+
+    clock_div:  usize,
+}
+
+impl Timers {
+    pub fn new() -> Self {
+        Self {
+            timers: [
+                Timer::new(true),
+                Timer::new(true),
+                Timer::new(false),
+            ],
+            in_hblank: false,
+            in_vblank: false,
+
+            clock_div: 0,
+        }
+    }
+
+    pub fn clock(&mut self, cycles: usize, hblank: bool, vblank: bool) -> Interrupt {
+        let mut interrupt = Interrupt::empty();
+        
+        let entered_hblank = self.set_blanks(hblank, vblank);
+        if self.timers[0].use_sys_clock() {
+            if self.timers[0].clock(cycles) {
+                interrupt |= Interrupt::Timer0;
+            }
+        } else { // Dot clock.
+            // TODO.
+        }
+        if self.timers[1].use_sys_clock() {
+            if self.timers[1].clock(cycles) {
+                interrupt |= Interrupt::Timer1;
+            }
+        } else if entered_hblank { // H-blank.
+            if self.timers[1].clock(1) {
+                interrupt |= Interrupt::Timer1;
+            }
+        }
+        self.clock_div += cycles;
+        if self.timers[2].use_sys_clock() {
+            if self.timers[2].clock(cycles) {
+                interrupt |= Interrupt::Timer2;
+            }
+        } else if self.clock_div >= 8 { // Clock / 8.
+            if self.timers[2].clock(self.clock_div / 8) {
+                interrupt |= Interrupt::Timer2;
+            }
+            self.clock_div = self.clock_div % 8;
+        }
+        interrupt
+    }
+
+    /// Update current h- and v-blank status.
+    /// 
+    /// Returns true if h-blank has been entered.
+    fn set_blanks(&mut self, hblank: bool, vblank: bool) -> bool {
+        let entered_hblank = !self.in_hblank && hblank;
+        if entered_hblank {
+            self.timers[0].blank_begin();
+        }
+        if self.in_hblank && !hblank {
+            self.timers[0].blank_end();
+        }
+        if !self.in_vblank && vblank {
+            self.timers[1].blank_begin();
+        }
+        if self.in_vblank && !vblank {
+            self.timers[1].blank_end();
+        }
+        self.in_hblank = hblank;
+        self.in_vblank = vblank;
+        entered_hblank
+    }
+}
+
+impl MemInterface for Timers {
+    fn read_word(&mut self, addr: u32) -> u32 {
+        match addr {
+            0x1F801100 => self.timers[0].counter as u32,
+            0x1F801104 => self.timers[0].read_mode(),
+            0x1F801108 => self.timers[0].target as u32,
+
+            0x1F801110 => self.timers[1].counter as u32,
+            0x1F801114 => self.timers[1].read_mode(),
+            0x1F801118 => self.timers[1].target as u32,
+
+            0x1F801120 => self.timers[2].counter as u32,
+            0x1F801124 => self.timers[2].read_mode(),
+            0x1F801128 => self.timers[2].target as u32,
+
+            _ => panic!("invalid timer addr {:X}", addr),
+        }
+    }
+
+    fn write_word(&mut self, addr: u32, data: u32) {
+        match addr {
+            0x1F801100 => self.timers[0].counter = 0,
+            0x1F801104 => self.timers[0].write_mode(data),
+            0x1F801108 => self.timers[0].target = data as u16,
+
+            0x1F801110 => self.timers[1].counter = 0,
+            0x1F801114 => self.timers[1].write_mode(data),
+            0x1F801118 => self.timers[1].target = data as u16,
+
+            0x1F801120 => self.timers[2].counter = 0,
+            0x1F801124 => self.timers[2].write_mode(data),
+            0x1F801128 => self.timers[2].target = data as u16,
+
+            _ => panic!("invalid timer addr {:X}", addr),
+        }
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    struct TimerMode: u32 {
+        const ReachedMax    = bit!(12);
+        const ReachedTarget = bit!(11);
+        const IRQReq        = bit!(10);
+        const ClockSrc      = bits![8, 9];
+        const ToggleIRQ     = bit!(7);
+        const RepeatIRQ     = bit!(6);
+        const MaxIRQ        = bit!(5);
+        const TargetIRQ     = bit!(4);
+        const Reset         = bit!(3);
+        const SyncMode      = bits![1, 2];
+        const SyncEnable    = bit!(0);
+
+        const Writable      = bits![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    }
+}
+
+/// Timer.
+struct Timer {
+    counter:    u16,
+    mode:       TimerMode,
+    target:     u16,
+    irq_latch:  bool,
+    in_blank:   bool,
+
+    pause:      bool,
+    blank_timer:bool,
+}
+
+impl Timer {
+    fn new(blank_timer: bool) -> Self {
+        Self {
+            counter:    0,
+            mode:       TimerMode::IRQReq,
+            target:     0,
+            irq_latch:  false,
+            in_blank:   false,
+
+            pause:      false,
+            blank_timer
+        }
+    }
+
+    fn write_mode(&mut self, mode: u32) {
+        let mode_write = TimerMode::from_bits_truncate(mode);
+        self.mode.remove(TimerMode::Writable);
+        self.mode.insert(mode_write & TimerMode::Writable);
+        if mode_write.contains(TimerMode::IRQReq) {
+            self.irq_latch = false;
+            self.mode.insert(TimerMode::IRQReq);
+        }
+        if mode_write.contains(TimerMode::SyncEnable) {
+            if self.blank_timer {
+                match (self.mode & TimerMode::SyncMode).bits() >> 1 {
+                    0b00 => self.pause = self.in_blank,
+                    0b01 => self.pause = false,
+                    0b10 => self.pause = !self.in_blank,
+                    0b11 => self.pause = true,
+                    _ => unreachable!()
+                }
+            } else {
+                match (self.mode & TimerMode::SyncMode).bits() >> 1 {
+                    0b00 | 0b11 => self.pause = true,
+                    0b01 | 0b10 => self.pause = false,
+                    _ => unreachable!()
+                }
+            }
+        } else {
+            self.pause = false;
+        }
+    }
+
+    fn read_mode(&mut self) -> u32 {
+        let mode = self.mode.bits();
+        self.mode.remove(TimerMode::ReachedMax | TimerMode::ReachedTarget);
+        mode
+    }
+
+    fn blank_begin(&mut self) {
+        self.in_blank = true;
+        if self.mode.contains(TimerMode::SyncEnable) {
+            match (self.mode & TimerMode::SyncMode).bits() >> 1 {
+                0b00 => self.pause = true,
+                0b01 => self.counter = 0,
+                0b10 => {
+                    self.counter = 0;
+                    self.pause = false;
+                },
+                0b11 => self.pause = false,
+                _ => unreachable!()
+            }
+        }
+    }
+
+    fn blank_end(&mut self) {
+        self.in_blank = false;
+        if self.mode.contains(TimerMode::SyncEnable) {
+            match (self.mode & TimerMode::SyncMode).bits() >> 1 {
+                0b00 => self.pause = false,
+                0b01 => (),
+                0b10 => self.pause = true,
+                0b11 => (),
+                _ => unreachable!()
+            }
+        }
+    }
+
+    fn use_sys_clock(&self) -> bool {
+        let src = (self.mode & TimerMode::ClockSrc).bits() >> 8;
+        if self.blank_timer {
+            (src & 0b10) == 0
+        } else {
+            (src & 0b1) == 0
+        }
+    }
+
+    fn clock(&mut self, cycles: usize) -> bool {
+        if self.pause {
+            return false;
+        }
+        let prev_irq_req = self.mode.contains(TimerMode::IRQReq);
+        let new_counter = (self.counter as usize) + cycles;
+        if new_counter >= (self.target as usize) {
+            if self.mode.contains(TimerMode::TargetIRQ) {
+                self.trigger_interrupt();
+            }
+            if self.mode.contains(TimerMode::Reset) {
+                self.counter = (new_counter - (self.target as usize)) as u16;
+            }
+        }
+        if new_counter >= 0xFFFF {
+            if self.mode.contains(TimerMode::MaxIRQ) {
+                self.trigger_interrupt();
+            }
+            if !self.mode.contains(TimerMode::Reset) {
+                self.counter = (new_counter - 0xFFFF) as u16;
+            }
+        }
+        prev_irq_req && !self.mode.contains(TimerMode::IRQReq)
+    }
+
+    fn trigger_interrupt(&mut self) {
+        if self.mode.contains(TimerMode::RepeatIRQ) {
+            if self.mode.contains(TimerMode::ToggleIRQ) {
+                self.mode.toggle(TimerMode::IRQReq);
+            } else {
+                self.mode.remove(TimerMode::IRQReq);
+            }
+        } else {
+            if !self.irq_latch {
+                self.irq_latch = true;
+                // TODO: should it do this? or always remove IRQReq?
+                if self.mode.contains(TimerMode::ToggleIRQ) {
+                    self.mode.toggle(TimerMode::IRQReq);
+                } else {
+                    self.mode.remove(TimerMode::IRQReq);
+                }
+            }
+        }
+    }
+}

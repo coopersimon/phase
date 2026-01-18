@@ -2,6 +2,7 @@ mod cpu;
 mod mem;
 mod gte;
 mod interrupt;
+mod timer;
 mod utils;
 
 /// A PlayStation console.

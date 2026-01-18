@@ -8,6 +8,7 @@ use bios::BIOS;
 use control::MemControl;
 
 use crate::interrupt::InterruptControl;
+use crate::timer::Timers;
 use crate::utils::interface::MemInterface;
 
 
@@ -17,6 +18,8 @@ pub struct MemBus {
     scratchpad: RAM,
     bios: BIOS,
     interrupts: InterruptControl,
+
+    timers: Timers,
 }
 
 impl MemBus {
@@ -28,6 +31,8 @@ impl MemBus {
             scratchpad: RAM::new(1024),
             bios,
             interrupts: InterruptControl::new(),
+
+            timers: Timers::new(),
         }
     }
 }
@@ -36,9 +41,17 @@ impl Mem32 for MemBus {
     type Addr = u32;
     const LITTLE_ENDIAN: bool = true;
 
-    fn clock(&mut self, _cycles: usize) -> u8 {
-        if self.interrupts.check_interrupt() {
-            0x04
+    fn clock(&mut self, cycles: usize) -> u8 {
+        let hblank = false;
+        let vblank = false;
+
+        let timer_irq = self.timers.clock(cycles, hblank, vblank);
+
+        let irq = self.interrupts.trigger_interrupt(
+            timer_irq
+        );
+        if irq {
+            0x04 // Interrupt bit 2 is used for all external hardware IRQs.
         } else {
             0x00
         }
@@ -84,7 +97,7 @@ impl MemBus {
             0x1F80_1060..=0x1F80_1063 => Some(&mut self.control),
             0x1F80_1070..=0x1F80_1077 => Some(&mut self.interrupts),
             0x1F80_1080..=0x1F80_10FF => None, // DMA
-            0x1F80_1100..=0x1F80_1129 => None, // Timers
+            0x1F80_1100..=0x1F80_1129 => Some(&mut self.timers),
             0x1F80_1800..=0x1F80_1803 => None, // CD-ROM
             0x1F80_1810..=0x1F80_1817 => None, // GPU
             0x1F80_1820..=0x1F80_1827 => None, // MDEC

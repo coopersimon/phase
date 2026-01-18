@@ -30,11 +30,11 @@ impl InterruptControl {
         }
     }
 
-    pub fn trigger_interrupt(&mut self, int: Interrupt) {
+    /// Trigger newly occurring interrupts.
+    /// 
+    /// Returns true if any overlap with the interrupt mask.
+    pub fn trigger_interrupt(&mut self, int: Interrupt) -> bool {
         self.status.insert(int);
-    }
-
-    pub fn check_interrupt(&self) -> bool {
         self.status.intersects(self.mask)
     }
 }
