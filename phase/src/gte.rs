@@ -86,10 +86,10 @@ impl Coprocessor for GTE {
                 };
                 self.mvmva(shift(), ir_unsigned(), mul_mat, mul_vec, trans_vec)
             },
-            0x13 => self.ncds(),
+            0x13 => self.ncds(shift(), ir_unsigned()),
             0x14 => self.cdp(),
-            0x16 => self.ncdt(),
-            0x1B => self.nccs(),
+            0x16 => self.ncdt(shift(), ir_unsigned()),
+            0x1B => self.nccs(shift(), ir_unsigned()),
             0x1C => self.cc(),
             0x1E => self.ncs(shift(), ir_unsigned()),
             0x20 => self.nct(shift(), ir_unsigned()),
@@ -101,7 +101,7 @@ impl Coprocessor for GTE {
             0x30 => self.rtpt(shift(), ir_unsigned()),
             0x3D => self.gpf(),
             0x3E => self.gpl(),
-            0x3F => self.ncct(),
+            0x3F => self.ncct(shift(), ir_unsigned()),
             _ => {}, // Undefined
         }
     }
@@ -501,12 +501,10 @@ impl GTE {
     }
 
     /// Multiply normal by light direction, then multiply the result by color matrix.
-    fn color_mul(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) {
-        use Reg::*;
+    /// 
+    /// Returns mac[1,2,3]
+    fn normal_color_mul(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) -> [i32; 3] {
         use Control::*;
-        // Shift color FIFO.
-        self.regs[RGB0.idx()] = self.regs[RGB1.idx()];
-        self.regs[RGB1.idx()] = self.regs[RGB2.idx()];
         // Light direction calculation.
         let ir1 = {
             let l11 = self.get_control_i16_hi(L11_12) as i64;
@@ -530,40 +528,94 @@ impl GTE {
             self.set_ir3(mac3, ir_unsigned)
         };
         // Color matrix calculation.
-        let r = {
+        let mac1 = {
             let lr1 = self.get_control_i16_hi(LR1R2) as i64;
             let lr2 = self.get_control_i16_lo(LR1R2) as i64;
             let lr3 = self.get_control_i16_hi(LR3G1) as i64;
             let rbk = self.get_control_i32(RBK) as i64;
-            let mac1 = self.set_mac1(lr1 * ir1 + lr2 * ir2 + lr3 * ir3 + (rbk << 12), shift);
+            self.set_mac1(lr1 * ir1 + lr2 * ir2 + lr3 * ir3 + (rbk << 12), shift)
+        };
+        let mac2 = {
+            let lg1 = self.get_control_i16_lo(LR3G1) as i64;
+            let lg2 = self.get_control_i16_hi(LG2G3) as i64;
+            let lg3 = self.get_control_i16_lo(LG2G3) as i64;
+            let gbk = self.get_control_i32(GBK) as i64;
+            self.set_mac2(lg1 * ir1 + lg2 * ir2 + lg3 * ir3 + (gbk << 12), shift)
+        };
+        let mac3 = {
+            let lb1 = self.get_control_i16_hi(LB1B2) as i64;
+            let lb2 = self.get_control_i16_lo(LB1B2) as i64;
+            let lb3 = self.get_control_i16_hi(LB3) as i64;
+            let bbk = self.get_control_i32(BBK) as i64;
+            self.set_mac3(lb1 * ir1 + lb2 * ir2 + lb3 * ir3 + (bbk << 12), shift)
+        };
+        [mac1, mac2, mac3]
+    }
+
+    /// Normal * color calculation.
+    /// Shifts color FIFO.
+    fn normal_color(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) {
+        use Reg::*;
+        // Shift color FIFO.
+        self.regs[RGB0.idx()] = self.regs[RGB1.idx()];
+        self.regs[RGB1.idx()] = self.regs[RGB2.idx()];
+        let [mac1, mac2, mac3] = self.normal_color_mul(shift, ir_unsigned, nx, ny, nz);
+        let r = {
             self.set_ir1(mac1, ir_unsigned);
             let r = mac1 >> 4;
             self.set_flag(Flag::ColRSat, r > 0xFF);
             r.clamp(0, 0xFF) as u32
         };
         let g = {
-            let lg1 = self.get_control_i16_lo(LR3G1) as i64;
-            let lg2 = self.get_control_i16_hi(LG2G3) as i64;
-            let lg3 = self.get_control_i16_lo(LG2G3) as i64;
-            let gbk = self.get_control_i32(GBK) as i64;
-            let mac2 = self.set_mac2(lg1 * ir1 + lg2 * ir2 + lg3 * ir3 + (gbk << 12), shift);
             self.set_ir2(mac2, ir_unsigned);
             let g = mac2 >> 4;
             self.set_flag(Flag::ColGSat, g > 0xFF);
             g.clamp(0, 0xFF) as u32
         };
         let b = {
-            let lb1 = self.get_control_i16_hi(LB1B2) as i64;
-            let lb2 = self.get_control_i16_lo(LB1B2) as i64;
-            let lb3 = self.get_control_i16_hi(LB3) as i64;
-            let bbk = self.get_control_i32(BBK) as i64;
-            let mac3 = self.set_mac3(lb1 * ir1 + lb2 * ir2 + lb3 * ir3 + (bbk << 12), shift);
             self.set_ir3(mac3, ir_unsigned);
             let b = mac3 >> 4;
             self.set_flag(Flag::ColBSat, b > 0xFF);
             b.clamp(0, 0xFF) as u32
         };
         let code = self.regs[RGBC.idx()] & 0xFF00_0000;
+        self.regs[RGB2.idx()] = code | (r << 16) | (g << 8) | b;
+    }
+
+    /// Normal * color calculation, with color factor.
+    /// Shifts color FIFO.
+    fn normal_color_color(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) {
+        use Reg::*;
+        // Shift color FIFO.
+        self.regs[RGB0.idx()] = self.regs[RGB1.idx()];
+        self.regs[RGB1.idx()] = self.regs[RGB2.idx()];
+        let [mac1, mac2, mac3] = self.normal_color_mul(shift, ir_unsigned, nx, ny, nz);
+        let rgbc = self.regs[RGBC.idx()];
+        let r = {
+            let r = ((rgbc >> 16) & 0xFF) as i64;
+            let ir1 = self.set_ir1(mac1, ir_unsigned);
+            let mac1 = self.set_mac1(ir1 * r, shift) >> 4;
+            self.set_ir1(mac1, ir_unsigned);
+            self.set_flag(Flag::ColRSat, mac1 > 0xFF);
+            mac1.clamp(0, 0xFF) as u32
+        };
+        let g = {
+            let g = ((rgbc >> 8) & 0xFF) as i64;
+            let ir2 = self.set_ir2(mac2, ir_unsigned);
+            let mac2 = self.set_mac2(ir2 * g, shift) >> 4;
+            self.set_ir2(mac2, ir_unsigned);
+            self.set_flag(Flag::ColGSat, mac2 > 0xFF);
+            mac2.clamp(0, 0xFF) as u32
+        };
+        let b = {
+            let b = (rgbc & 0xFF) as i64;
+            let ir3 = self.set_ir3(mac3, ir_unsigned);
+            let mac3 = self.set_mac3(ir3 * b, shift) >> 4;
+            self.set_ir3(mac3, ir_unsigned);
+            self.set_flag(Flag::ColBSat, mac3 > 0xFF);
+            mac3.clamp(0, 0xFF) as u32
+        };
+        let code = rgbc & 0xFF00_0000;
         self.regs[RGB2.idx()] = code | (r << 16) | (g << 8) | b;
     }
 }
@@ -748,7 +800,7 @@ impl GTE {
         let vx0 = self.get_reg_i16_lo(VXY0) as i64;
         let vy0 = self.get_reg_i16_hi(VXY0) as i64;
         let vz0 = self.get_reg_i16_lo(VZ0) as i64;
-        self.color_mul(shift, ir_unsigned, vx0, vy0, vz0);
+        self.normal_color(shift, ir_unsigned, vx0, vy0, vz0);
     }
 
     /// Normal color (triple).
@@ -757,34 +809,50 @@ impl GTE {
         let vx0 = self.get_reg_i16_lo(VXY0) as i64;
         let vy0 = self.get_reg_i16_hi(VXY0) as i64;
         let vz0 = self.get_reg_i16_lo(VZ0) as i64;
-        self.color_mul(shift, ir_unsigned, vx0, vy0, vz0);
+        self.normal_color(shift, ir_unsigned, vx0, vy0, vz0);
         let vx1 = self.get_reg_i16_lo(VXY1) as i64;
         let vy1 = self.get_reg_i16_hi(VXY1) as i64;
         let vz1 = self.get_reg_i16_lo(VZ1) as i64;
-        self.color_mul(shift, ir_unsigned, vx1, vy1, vz1);
+        self.normal_color(shift, ir_unsigned, vx1, vy1, vz1);
         let vx2 = self.get_reg_i16_lo(VXY2) as i64;
         let vy2 = self.get_reg_i16_hi(VXY2) as i64;
         let vz2 = self.get_reg_i16_lo(VZ2) as i64;
-        self.color_mul(shift, ir_unsigned, vx2, vy2, vz2);
+        self.normal_color(shift, ir_unsigned, vx2, vy2, vz2);
     }
 
     /// Normal color color (single).
-    fn nccs(&mut self) {
-
+    fn nccs(&mut self, shift: u8, ir_unsigned: bool) {
+        use Reg::*;
+        let vx0 = self.get_reg_i16_lo(VXY0) as i64;
+        let vy0 = self.get_reg_i16_hi(VXY0) as i64;
+        let vz0 = self.get_reg_i16_lo(VZ0) as i64;
+        self.normal_color_color(shift, ir_unsigned, vx0, vy0, vz0);
     }
 
     /// Normal color color (triple).
-    fn ncct(&mut self) {
-
+    fn ncct(&mut self, shift: u8, ir_unsigned: bool) {
+        use Reg::*;
+        let vx0 = self.get_reg_i16_lo(VXY0) as i64;
+        let vy0 = self.get_reg_i16_hi(VXY0) as i64;
+        let vz0 = self.get_reg_i16_lo(VZ0) as i64;
+        self.normal_color_color(shift, ir_unsigned, vx0, vy0, vz0);
+        let vx1 = self.get_reg_i16_lo(VXY1) as i64;
+        let vy1 = self.get_reg_i16_hi(VXY1) as i64;
+        let vz1 = self.get_reg_i16_lo(VZ1) as i64;
+        self.normal_color_color(shift, ir_unsigned, vx1, vy1, vz1);
+        let vx2 = self.get_reg_i16_lo(VXY2) as i64;
+        let vy2 = self.get_reg_i16_hi(VXY2) as i64;
+        let vz2 = self.get_reg_i16_lo(VZ2) as i64;
+        self.normal_color_color(shift, ir_unsigned, vx2, vy2, vz2);
     }
 
     /// Normal color depth queue (single).
-    fn ncds(&mut self) {
+    fn ncds(&mut self, shift: u8, ir_unsigned: bool) {
 
     }
 
     /// Normal color depth queue (triple).
-    fn ncdt(&mut self) {
+    fn ncdt(&mut self, shift: u8, ir_unsigned: bool) {
 
     }
 
