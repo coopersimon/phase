@@ -618,6 +618,54 @@ impl GTE {
         let code = rgbc & 0xFF00_0000;
         self.regs[RGB2.idx()] = code | (r << 16) | (g << 8) | b;
     }
+
+    /// Normal * color calculation, with depth queue.
+    /// Shifts color FIFO.
+    fn normal_color_depth(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) {
+        use Reg::*;
+        use Control::*;
+        // Shift color FIFO.
+        self.regs[RGB0.idx()] = self.regs[RGB1.idx()];
+        self.regs[RGB1.idx()] = self.regs[RGB2.idx()];
+        let [mac1, mac2, mac3] = self.normal_color_mul(shift, ir_unsigned, nx, ny, nz);
+        let rgbc = self.regs[RGBC.idx()];
+        let ir0 = self.get_reg_i16_lo(IR0) as i64;
+        let r = {
+            let r = ((rgbc >> 16) & 0xFF) as i64;
+            let ir1 = self.set_ir1(mac1, ir_unsigned);
+            let mac1 = (self.set_mac1(ir1 * r, 0) >> 4) as i64;
+            let rfc = self.get_control_i32(RFC) as i64;
+            let ir1 = self.set_ir1((((rfc << 12) - mac1) >> shift) as i32, false);
+            let mac1 = self.set_mac1(ir1 * ir0 + mac1, shift);
+            self.set_ir1(mac1, ir_unsigned);
+            self.set_flag(Flag::ColRSat, mac1 > 0xFF);
+            mac1.clamp(0, 0xFF) as u32
+        };
+        let g = {
+            let g = ((rgbc >> 8) & 0xFF) as i64;
+            let ir2 = self.set_ir2(mac2, ir_unsigned);
+            let mac2 = (self.set_mac2(ir2 * g, 0) >> 4) as i64;
+            let gfc = self.get_control_i32(GFC) as i64;
+            let ir2 = self.set_ir2((((gfc << 12) - mac2) >> shift) as i32, false);
+            let mac2 = self.set_mac2(ir2 * ir0 + mac2, shift);
+            self.set_ir2(mac2, ir_unsigned);
+            self.set_flag(Flag::ColGSat, mac2 > 0xFF);
+            mac2.clamp(0, 0xFF) as u32
+        };
+        let b = {
+            let b = (rgbc & 0xFF) as i64;
+            let ir3 = self.set_ir3(mac3, ir_unsigned);
+            let mac3 = (self.set_mac3(ir3 * b, 0) >> 4) as i64;
+            let bfc = self.get_control_i32(BFC) as i64;
+            let ir3 = self.set_ir3((((bfc << 12) - mac3) >> shift) as i32, false);
+            let mac3 = self.set_mac3(ir3 * ir0 + mac3, shift);
+            self.set_ir3(mac3, ir_unsigned);
+            self.set_flag(Flag::ColBSat, mac3 > 0xFF);
+            mac3.clamp(0, 0xFF) as u32
+        };
+        let code = rgbc & 0xFF00_0000;
+        self.regs[RGB2.idx()] = code | (r << 16) | (g << 8) | b;
+    }
 }
 
 // Commands.
@@ -848,12 +896,28 @@ impl GTE {
 
     /// Normal color depth queue (single).
     fn ncds(&mut self, shift: u8, ir_unsigned: bool) {
-
+        use Reg::*;
+        let vx0 = self.get_reg_i16_lo(VXY0) as i64;
+        let vy0 = self.get_reg_i16_hi(VXY0) as i64;
+        let vz0 = self.get_reg_i16_lo(VZ0) as i64;
+        self.normal_color_depth(shift, ir_unsigned, vx0, vy0, vz0);
     }
 
     /// Normal color depth queue (triple).
     fn ncdt(&mut self, shift: u8, ir_unsigned: bool) {
-
+        use Reg::*;
+        let vx0 = self.get_reg_i16_lo(VXY0) as i64;
+        let vy0 = self.get_reg_i16_hi(VXY0) as i64;
+        let vz0 = self.get_reg_i16_lo(VZ0) as i64;
+        self.normal_color_depth(shift, ir_unsigned, vx0, vy0, vz0);
+        let vx1 = self.get_reg_i16_lo(VXY1) as i64;
+        let vy1 = self.get_reg_i16_hi(VXY1) as i64;
+        let vz1 = self.get_reg_i16_lo(VZ1) as i64;
+        self.normal_color_depth(shift, ir_unsigned, vx1, vy1, vz1);
+        let vx2 = self.get_reg_i16_lo(VXY2) as i64;
+        let vy2 = self.get_reg_i16_hi(VXY2) as i64;
+        let vz2 = self.get_reg_i16_lo(VZ2) as i64;
+        self.normal_color_depth(shift, ir_unsigned, vx2, vy2, vz2);
     }
 
     /// Square IR.
