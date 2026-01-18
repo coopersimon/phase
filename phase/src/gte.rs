@@ -66,7 +66,7 @@ impl Coprocessor for GTE {
             0x01 => self.rtps(shift(), ir_unsigned()),
             0x06 => self.nclip(),
             0x0C => self.op(shift(), ir_unsigned()),
-            0x10 => self.dpcs(),
+            0x10 => self.dpcs(shift(), ir_unsigned()),
             0x11 => self.intpl(),
             0x12 => {
                 let mul_mat = {
@@ -87,15 +87,15 @@ impl Coprocessor for GTE {
                 self.mvmva(shift(), ir_unsigned(), mul_mat, mul_vec, trans_vec)
             },
             0x13 => self.ncds(shift(), ir_unsigned()),
-            0x14 => self.cdp(),
+            0x14 => self.cdp(shift(), ir_unsigned()),
             0x16 => self.ncdt(shift(), ir_unsigned()),
             0x1B => self.nccs(shift(), ir_unsigned()),
-            0x1C => self.cc(),
+            0x1C => self.cc(shift(), ir_unsigned()),
             0x1E => self.ncs(shift(), ir_unsigned()),
             0x20 => self.nct(shift(), ir_unsigned()),
             0x28 => self.sqr(shift(), ir_unsigned()),
             0x29 => self.dcpl(),
-            0x2A => self.dpct(),
+            0x2A => self.dpct(shift(), ir_unsigned()),
             0x2D => self.avsz3(),
             0x2E => self.avsz4(),
             0x30 => self.rtpt(shift(), ir_unsigned()),
@@ -278,6 +278,18 @@ impl GTE {
     }
 
     #[inline]
+    /// Push new color onto the FIFO.
+    /// 
+    /// R,G,B should be 8-bits. Code will be taken from top 8 bits of rgbc.
+    fn push_color(&mut self, rgbc: u32, r: u32, g: u32, b: u32) {
+        use Reg::*;
+        self.regs[RGB0.idx()] = self.regs[RGB1.idx()];
+        self.regs[RGB1.idx()] = self.regs[RGB2.idx()];
+        let code = rgbc & 0xFF00_0000;
+        self.regs[RGB2.idx()] = code | (r << 16) | (g << 8) | b;
+    }
+
+    #[inline]
     /// Set MAC1 and associated flags.
     /// 
     /// Returns shifted MAC1 value.
@@ -299,11 +311,13 @@ impl GTE {
         let ir1 = if mac1 > 0x7FFF {
             self.insert_flag(Flag::IR1Sat);
             0x7FFF_i16
-        } else if mac1 < -0x8000 {
-            self.set_flag(Flag::IR1Sat, if ir_unsigned {mac1 < 0} else {true});
+        } else if ir_unsigned && mac1 < 0 {
+            self.insert_flag(Flag::IR1Sat);
+            0_i16
+        } else if !ir_unsigned && mac1 < -0x8000 {
+            self.insert_flag(Flag::IR1Sat);
             -0x8000_i16
         } else {
-            self.set_flag(Flag::IR1Sat, ir_unsigned && mac1 < 0);
             mac1 as i16
         };
         self.regs[Reg::IR1.idx()] = ir1 as u32; // TODO: sign extend?
@@ -332,11 +346,13 @@ impl GTE {
         let ir2 = if mac2 > 0x7FFF {
             self.insert_flag(Flag::IR2Sat);
             0x7FFF_i16
-        } else if mac2 < -0x8000 {
-            self.set_flag(Flag::IR2Sat, if ir_unsigned {mac2 < 0} else {true});
+        } else if ir_unsigned && mac2 < 0 {
+            self.insert_flag(Flag::IR2Sat);
+            0_i16
+        } else if !ir_unsigned && mac2 < -0x8000 {
+            self.insert_flag(Flag::IR2Sat);
             -0x8000_i16
         } else {
-            self.set_flag(Flag::IR2Sat, ir_unsigned && mac2 < 0);
             mac2 as i16
         };
         self.regs[Reg::IR2.idx()] = ir2 as u32; // TODO: sign extend?
@@ -365,11 +381,13 @@ impl GTE {
         let ir3 = if mac3 > 0x7FFF {
             self.insert_flag(Flag::IR3Sat);
             0x7FFF_i16
-        } else if mac3 < -0x8000 {
-            self.set_flag(Flag::IR3Sat, if ir_unsigned {mac3 < 0} else {true});
+        } else if ir_unsigned && mac3 < 0 {
+            self.insert_flag(Flag::IR3Sat);
+            0_i16
+        } else if !ir_unsigned && mac3 < -0x8000 {
+            self.insert_flag(Flag::IR3Sat);
             -0x8000_i16
         } else {
-            self.set_flag(Flag::IR3Sat, ir_unsigned && mac3 < 0);
             mac3 as i16
         };
         self.regs[Reg::IR3.idx()] = ir3 as u32; // TODO: sign extend?
@@ -500,96 +518,9 @@ impl GTE {
         self.regs[IR0.idx()] = ir0 as u32;
     }
 
-    /// Multiply normal by light direction, then multiply the result by color matrix.
-    /// 
-    /// Returns mac[1,2,3]
-    fn normal_color_mul(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) -> [i32; 3] {
-        use Control::*;
-        // Light direction calculation.
-        let ir1 = {
-            let l11 = self.get_control_i16_hi(L11_12) as i64;
-            let l12 = self.get_control_i16_lo(L11_12) as i64;
-            let l13 = self.get_control_i16_hi(L13_21) as i64;
-            let mac1 = self.set_mac1(l11 * nx + l12 * ny + l13 * nz, shift);
-            self.set_ir1(mac1, ir_unsigned)
-        };
-        let ir2 = {
-            let l21 = self.get_control_i16_lo(L13_21) as i64;
-            let l22 = self.get_control_i16_hi(L22_23) as i64;
-            let l23 = self.get_control_i16_lo(L22_23) as i64;
-            let mac2 = self.set_mac2(l21 * nx + l22 * ny + l23 * nz, shift);
-            self.set_ir2(mac2, ir_unsigned)
-        };
-        let ir3 = {
-            let l31 = self.get_control_i16_hi(L31_32) as i64;
-            let l32 = self.get_control_i16_lo(L31_32) as i64;
-            let l33 = self.get_control_i16_hi(L33) as i64;
-            let mac3 = self.set_mac3(l31 * nx + l32 * ny + l33 * nz, shift);
-            self.set_ir3(mac3, ir_unsigned)
-        };
-        // Color matrix calculation.
-        let mac1 = {
-            let lr1 = self.get_control_i16_hi(LR1R2) as i64;
-            let lr2 = self.get_control_i16_lo(LR1R2) as i64;
-            let lr3 = self.get_control_i16_hi(LR3G1) as i64;
-            let rbk = self.get_control_i32(RBK) as i64;
-            self.set_mac1(lr1 * ir1 + lr2 * ir2 + lr3 * ir3 + (rbk << 12), shift)
-        };
-        let mac2 = {
-            let lg1 = self.get_control_i16_lo(LR3G1) as i64;
-            let lg2 = self.get_control_i16_hi(LG2G3) as i64;
-            let lg3 = self.get_control_i16_lo(LG2G3) as i64;
-            let gbk = self.get_control_i32(GBK) as i64;
-            self.set_mac2(lg1 * ir1 + lg2 * ir2 + lg3 * ir3 + (gbk << 12), shift)
-        };
-        let mac3 = {
-            let lb1 = self.get_control_i16_hi(LB1B2) as i64;
-            let lb2 = self.get_control_i16_lo(LB1B2) as i64;
-            let lb3 = self.get_control_i16_hi(LB3) as i64;
-            let bbk = self.get_control_i32(BBK) as i64;
-            self.set_mac3(lb1 * ir1 + lb2 * ir2 + lb3 * ir3 + (bbk << 12), shift)
-        };
-        [mac1, mac2, mac3]
-    }
-
-    /// Normal * color calculation.
-    /// Shifts color FIFO.
-    fn normal_color(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) {
+    /// Multiply RGB with IR values, saturate, and push to stack.
+    fn color_color(&mut self, shift: u8, ir_unsigned: bool, mac1: i32, mac2: i32, mac3: i32) {
         use Reg::*;
-        // Shift color FIFO.
-        self.regs[RGB0.idx()] = self.regs[RGB1.idx()];
-        self.regs[RGB1.idx()] = self.regs[RGB2.idx()];
-        let [mac1, mac2, mac3] = self.normal_color_mul(shift, ir_unsigned, nx, ny, nz);
-        let r = {
-            self.set_ir1(mac1, ir_unsigned);
-            let r = mac1 >> 4;
-            self.set_flag(Flag::ColRSat, r > 0xFF);
-            r.clamp(0, 0xFF) as u32
-        };
-        let g = {
-            self.set_ir2(mac2, ir_unsigned);
-            let g = mac2 >> 4;
-            self.set_flag(Flag::ColGSat, g > 0xFF);
-            g.clamp(0, 0xFF) as u32
-        };
-        let b = {
-            self.set_ir3(mac3, ir_unsigned);
-            let b = mac3 >> 4;
-            self.set_flag(Flag::ColBSat, b > 0xFF);
-            b.clamp(0, 0xFF) as u32
-        };
-        let code = self.regs[RGBC.idx()] & 0xFF00_0000;
-        self.regs[RGB2.idx()] = code | (r << 16) | (g << 8) | b;
-    }
-
-    /// Normal * color calculation, with color factor.
-    /// Shifts color FIFO.
-    fn normal_color_color(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) {
-        use Reg::*;
-        // Shift color FIFO.
-        self.regs[RGB0.idx()] = self.regs[RGB1.idx()];
-        self.regs[RGB1.idx()] = self.regs[RGB2.idx()];
-        let [mac1, mac2, mac3] = self.normal_color_mul(shift, ir_unsigned, nx, ny, nz);
         let rgbc = self.regs[RGBC.idx()];
         let r = {
             let r = ((rgbc >> 16) & 0xFF) as i64;
@@ -615,19 +546,13 @@ impl GTE {
             self.set_flag(Flag::ColBSat, mac3 > 0xFF);
             mac3.clamp(0, 0xFF) as u32
         };
-        let code = rgbc & 0xFF00_0000;
-        self.regs[RGB2.idx()] = code | (r << 16) | (g << 8) | b;
+        self.push_color(rgbc, r, g, b);
     }
 
-    /// Normal * color calculation, with depth queue.
-    /// Shifts color FIFO.
-    fn normal_color_depth(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) {
+    /// Multiply RGB with IR values, depth queue, saturate, and push to stack.
+    fn color_depth(&mut self, shift: u8, ir_unsigned: bool, mac1: i32, mac2: i32, mac3: i32) {
         use Reg::*;
         use Control::*;
-        // Shift color FIFO.
-        self.regs[RGB0.idx()] = self.regs[RGB1.idx()];
-        self.regs[RGB1.idx()] = self.regs[RGB2.idx()];
-        let [mac1, mac2, mac3] = self.normal_color_mul(shift, ir_unsigned, nx, ny, nz);
         let rgbc = self.regs[RGBC.idx()];
         let ir0 = self.get_reg_i16_lo(IR0) as i64;
         let r = {
@@ -663,8 +588,145 @@ impl GTE {
             self.set_flag(Flag::ColBSat, mac3 > 0xFF);
             mac3.clamp(0, 0xFF) as u32
         };
-        let code = rgbc & 0xFF00_0000;
-        self.regs[RGB2.idx()] = code | (r << 16) | (g << 8) | b;
+        self.push_color(rgbc, r, g, b);
+    }
+
+    /// Multiply normal by light direction.
+    /// 
+    /// Returns ir[1,2,3]
+    fn light_dir_mul(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) -> [i64; 3] {
+        use Control::*;
+        let ir1 = {
+            let l11 = self.get_control_i16_hi(L11_12) as i64;
+            let l12 = self.get_control_i16_lo(L11_12) as i64;
+            let l13 = self.get_control_i16_hi(L13_21) as i64;
+            let mac1 = self.set_mac1(l11 * nx + l12 * ny + l13 * nz, shift);
+            self.set_ir1(mac1, ir_unsigned)
+        };
+        let ir2 = {
+            let l21 = self.get_control_i16_lo(L13_21) as i64;
+            let l22 = self.get_control_i16_hi(L22_23) as i64;
+            let l23 = self.get_control_i16_lo(L22_23) as i64;
+            let mac2 = self.set_mac2(l21 * nx + l22 * ny + l23 * nz, shift);
+            self.set_ir2(mac2, ir_unsigned)
+        };
+        let ir3 = {
+            let l31 = self.get_control_i16_hi(L31_32) as i64;
+            let l32 = self.get_control_i16_lo(L31_32) as i64;
+            let l33 = self.get_control_i16_hi(L33) as i64;
+            let mac3 = self.set_mac3(l31 * nx + l32 * ny + l33 * nz, shift);
+            self.set_ir3(mac3, ir_unsigned)
+        };
+        [ir1, ir2, ir3]
+    }
+
+    /// Multiply IR by color matrix.
+    /// 
+    /// Returns mac[1,2,3]
+    fn color_mat_mul(&mut self, shift: u8, ir1: i64, ir2: i64, ir3: i64) -> [i32; 3] {
+        use Control::*;
+        let mac1 = {
+            let lr1 = self.get_control_i16_hi(LR1R2) as i64;
+            let lr2 = self.get_control_i16_lo(LR1R2) as i64;
+            let lr3 = self.get_control_i16_hi(LR3G1) as i64;
+            let rbk = self.get_control_i32(RBK) as i64;
+            self.set_mac1(lr1 * ir1 + lr2 * ir2 + lr3 * ir3 + (rbk << 12), shift)
+        };
+        let mac2 = {
+            let lg1 = self.get_control_i16_lo(LR3G1) as i64;
+            let lg2 = self.get_control_i16_hi(LG2G3) as i64;
+            let lg3 = self.get_control_i16_lo(LG2G3) as i64;
+            let gbk = self.get_control_i32(GBK) as i64;
+            self.set_mac2(lg1 * ir1 + lg2 * ir2 + lg3 * ir3 + (gbk << 12), shift)
+        };
+        let mac3 = {
+            let lb1 = self.get_control_i16_hi(LB1B2) as i64;
+            let lb2 = self.get_control_i16_lo(LB1B2) as i64;
+            let lb3 = self.get_control_i16_hi(LB3) as i64;
+            let bbk = self.get_control_i32(BBK) as i64;
+            self.set_mac3(lb1 * ir1 + lb2 * ir2 + lb3 * ir3 + (bbk << 12), shift)
+        };
+        [mac1, mac2, mac3]
+    }
+
+    /// Normal * color calculation.
+    /// Shifts color FIFO.
+    fn normal_color(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) {
+        use Reg::*;
+        let [ir1, ir2, ir3] = self.light_dir_mul(shift, ir_unsigned, nx, ny, nz);
+        let [mac1, mac2, mac3] = self.color_mat_mul(shift, ir1, ir2, ir3);
+        let r = {
+            self.set_ir1(mac1, ir_unsigned);
+            let r = mac1 >> 4;
+            self.set_flag(Flag::ColRSat, r > 0xFF);
+            r.clamp(0, 0xFF) as u32
+        };
+        let g = {
+            self.set_ir2(mac2, ir_unsigned);
+            let g = mac2 >> 4;
+            self.set_flag(Flag::ColGSat, g > 0xFF);
+            g.clamp(0, 0xFF) as u32
+        };
+        let b = {
+            self.set_ir3(mac3, ir_unsigned);
+            let b = mac3 >> 4;
+            self.set_flag(Flag::ColBSat, b > 0xFF);
+            b.clamp(0, 0xFF) as u32
+        };
+        self.push_color(self.regs[RGBC.idx()], r, g, b);
+    }
+
+    /// Normal * color calculation, with color factor.
+    /// Shifts color FIFO.
+    fn normal_color_color(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) {
+        let [ir1, ir2, ir3] = self.light_dir_mul(shift, ir_unsigned, nx, ny, nz);
+        let [mac1, mac2, mac3] = self.color_mat_mul(shift, ir1, ir2, ir3);
+        self.color_color(shift, ir_unsigned, mac1, mac2, mac3);
+    }
+
+    /// Normal * color calculation, with depth cue.
+    /// Shifts color FIFO.
+    fn normal_color_depth(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) {
+        let [ir1, ir2, ir3] = self.light_dir_mul(shift, ir_unsigned, nx, ny, nz);
+        let [mac1, mac2, mac3] = self.color_mat_mul(shift, ir1, ir2, ir3);
+        self.color_depth(shift, ir_unsigned, mac1, mac2, mac3);
+    }
+
+    fn depth_cue(&mut self, shift: u8, ir_unsigned: bool, rgbc: u32) {
+        use Reg::*;
+        use Control::*;
+        let ir0 = self.get_reg_i16_lo(IR0) as i64;
+        let r = {
+            let r = ((rgbc >> 16) & 0xFF) as i64;
+            let mac1 = r << 16;
+            let rfc = self.get_control_i32(RFC) as i64;
+            let ir1 = self.set_ir1((((rfc << 12) - mac1) >> shift) as i32, false);
+            let mac1 = self.set_mac1(ir1 * ir0 + mac1, shift);
+            self.set_ir1(mac1, ir_unsigned);
+            self.set_flag(Flag::ColRSat, mac1 > 0xFF);
+            mac1.clamp(0, 0xFF) as u32
+        };
+        let g = {
+            let g = ((rgbc >> 8) & 0xFF) as i64;
+            let mac2 = g << 16;
+            let gfc = self.get_control_i32(GFC) as i64;
+            let ir2 = self.set_ir2((((gfc << 12) - mac2) >> shift) as i32, false);
+            let mac2 = self.set_mac2(ir2 * ir0 + mac2, shift);
+            self.set_ir2(mac2, ir_unsigned);
+            self.set_flag(Flag::ColGSat, mac2 > 0xFF);
+            mac2.clamp(0, 0xFF) as u32
+        };
+        let b = {
+            let b = (rgbc & 0xFF) as i64;
+            let mac3 = b << 16;
+            let bfc = self.get_control_i32(BFC) as i64;
+            let ir3 = self.set_ir3((((bfc << 12) - mac3) >> shift) as i32, false);
+            let mac3 = self.set_mac3(ir3 * ir0 + mac3, shift);
+            self.set_ir3(mac3, ir_unsigned);
+            self.set_flag(Flag::ColBSat, mac3 > 0xFF);
+            mac3.clamp(0, 0xFF) as u32
+        };
+        self.push_color(rgbc, r, g, b);
     }
 }
 
@@ -727,14 +789,18 @@ impl GTE {
         self.set_ir3(mac3, ir_unsigned);
     }
 
-    /// Depth queueing (single).
-    fn dpcs(&mut self) {
-
+    /// Depth cue (single).
+    fn dpcs(&mut self, shift: u8, ir_unsigned: bool) {
+        let rgbc = self.regs[Reg::RGBC.idx()];
+        self.depth_cue(shift, ir_unsigned, rgbc);
     }
 
-    /// Depth queueing (triple).
-    fn dpct(&mut self) {
-
+    /// Depth cue (triple).
+    fn dpct(&mut self, shift: u8, ir_unsigned: bool) {
+        for _ in 0..3 {
+            let rgbc = self.regs[Reg::RGB0.idx()];
+            self.depth_cue(shift, ir_unsigned, rgbc);
+        }
     }
 
     /// Interpolation.
@@ -833,13 +899,23 @@ impl GTE {
     }
 
     /// Color color.
-    fn cc(&mut self) {
-
+    fn cc(&mut self, shift: u8, ir_unsigned: bool) {
+        use Reg::*;
+        let ir1 = self.get_reg_i16_lo(IR0) as i64;
+        let ir2 = self.get_reg_i16_lo(IR1) as i64;
+        let ir3 = self.get_reg_i16_lo(IR2) as i64;
+        let [mac1, mac2, mac3] = self.color_mat_mul(shift, ir1, ir2, ir3);
+        self.color_color(shift, ir_unsigned, mac1, mac2, mac3);
     }
 
-    /// Color depth queue.
-    fn cdp(&mut self) {
-
+    /// Color depth cue.
+    fn cdp(&mut self, shift: u8, ir_unsigned: bool) {
+        use Reg::*;
+        let ir1 = self.get_reg_i16_lo(IR0) as i64;
+        let ir2 = self.get_reg_i16_lo(IR1) as i64;
+        let ir3 = self.get_reg_i16_lo(IR2) as i64;
+        let [mac1, mac2, mac3] = self.color_mat_mul(shift, ir1, ir2, ir3);
+        self.color_depth(shift, ir_unsigned, mac1, mac2, mac3);
     }
 
     /// Normal color (single).
@@ -894,7 +970,7 @@ impl GTE {
         self.normal_color_color(shift, ir_unsigned, vx2, vy2, vz2);
     }
 
-    /// Normal color depth queue (single).
+    /// Normal color depth cue (single).
     fn ncds(&mut self, shift: u8, ir_unsigned: bool) {
         use Reg::*;
         let vx0 = self.get_reg_i16_lo(VXY0) as i64;
@@ -903,7 +979,7 @@ impl GTE {
         self.normal_color_depth(shift, ir_unsigned, vx0, vy0, vz0);
     }
 
-    /// Normal color depth queue (triple).
+    /// Normal color depth cue (triple).
     fn ncdt(&mut self, shift: u8, ir_unsigned: bool) {
         use Reg::*;
         let vx0 = self.get_reg_i16_lo(VXY0) as i64;
