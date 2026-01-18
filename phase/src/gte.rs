@@ -75,10 +75,10 @@ impl Coprocessor for GTE {
         match op {
             0x01 => self.rtps(shift(), ir_unsigned()),
             0x06 => self.nclip(),
-            0x0C => self.op(),
+            0x0C => self.op(shift(), ir_unsigned()),
             0x10 => self.dpcs(),
             0x11 => self.intpl(),
-            0x12 => self.mvmva(),
+            0x12 => self.mvmva(shift(), ir_unsigned(), mul_mat(), mul_vec(), trans_vec()),
             0x13 => self.ncds(),
             0x14 => self.cdp(),
             0x16 => self.ncdt(),
@@ -86,7 +86,7 @@ impl Coprocessor for GTE {
             0x1C => self.cc(),
             0x1E => self.ncs(),
             0x20 => self.nct(),
-            0x28 => self.sqr(),
+            0x28 => self.sqr(shift(), ir_unsigned()),
             0x29 => self.dcpl(),
             0x2A => self.dpct(),
             0x2D => self.avsz3(),
@@ -271,6 +271,78 @@ impl GTE {
     }
 
     #[inline]
+    /// Set MAC1, IR1, and associated flags.
+    /// Also clamps IR1 value.
+    /// 
+    /// Returns final IR1 value.
+    fn set_ir1(&mut self, shift: u8, ir_unsigned: bool, data: i64) -> i64 {
+        self.set_flag(Flag::MAC1PosOvf, data > 0x7FF_FFFF_FFFF);
+        self.set_flag(Flag::MAC1NegOvf, data < -0x800_0000_0000);
+        let mac1 = (data >> shift) as i32;
+        self.regs[Reg::MAC1.idx()] = data as u32;
+        // TODO: reduce branches
+        let ir1 = if mac1 > 0x7FFF {
+            self.insert_flag(Flag::IR1Sat);
+            0x7FFF_i16
+        } else if mac1 < -0x8000 {
+            self.set_flag(Flag::IR1Sat, if ir_unsigned {mac1 < 0} else {true});
+            -0x8000_i16
+        } else {
+            mac1 as i16
+        };
+        self.regs[Reg::IR1.idx()] = ir1 as u32; // TODO: sign extend?
+        ir1 as i64
+    }
+
+    #[inline]
+    /// Set MAC2, IR2, and associated flags.
+    /// Also clamps IR2 value.
+    /// 
+    /// Returns final IR2 value.
+    fn set_ir2(&mut self, shift: u8, ir_unsigned: bool, data: i64) -> i64 {
+        self.set_flag(Flag::MAC2PosOvf, data > 0x7FF_FFFF_FFFF);
+        self.set_flag(Flag::MAC2NegOvf, data < -0x800_0000_0000);
+        let mac2 = (data >> shift) as i32;
+        self.regs[Reg::MAC2.idx()] = data as u32;
+        // TODO: reduce branches
+        let ir2 = if mac2 > 0x7FFF {
+            self.insert_flag(Flag::IR2Sat);
+            0x7FFF_i16
+        } else if mac2 < -0x8000 {
+            self.set_flag(Flag::IR2Sat, if ir_unsigned {mac2 < 0} else {true});
+            -0x8000_i16
+        } else {
+            mac2 as i16
+        };
+        self.regs[Reg::IR2.idx()] = ir2 as u32; // TODO: sign extend?
+        ir2 as i64
+    }
+
+    #[inline]
+    /// Set MAC3, IR3, and associated flags.
+    /// Also clamps IR3 value.
+    /// 
+    /// Returns shifted MAC3 value.
+    fn set_ir3(&mut self, shift: u8, ir_unsigned: bool, data: i64) -> i64 {
+        self.set_flag(Flag::MAC3PosOvf, data > 0x7FF_FFFF_FFFF);
+        self.set_flag(Flag::MAC3NegOvf, data < -0x800_0000_0000);
+        let mac3 = (data >> shift) as i32;
+        self.regs[Reg::MAC3.idx()] = data as u32;
+        // TODO: reduce branches
+        let ir3 = if mac3 > 0x7FFF {
+            self.insert_flag(Flag::IR3Sat);
+            0x7FFF_i16
+        } else if mac3 < -0x8000 {
+            self.set_flag(Flag::IR3Sat, if ir_unsigned {mac3 < 0} else {true});
+            -0x8000_i16
+        } else {
+            mac3 as i16
+        };
+        self.regs[Reg::IR3.idx()] = ir3 as u32; // TODO: sign extend?
+        mac3 as i64
+    }
+
+    #[inline]
     fn set_mac0(&mut self, data: i64) {
         self.regs[Reg::MAC0.idx()] = data as i32 as u32;
         self.set_flag(Flag::MAC0PosOvf, data > 0x7FFF_FFFF);
@@ -295,22 +367,7 @@ impl GTE {
             let rt13 = self.get_control_i16_hi(RT13_21) as i64;
             let trx = self.get_control_i32(TRX) as i64;
             let mac1 = (trx << 12) + rt11 * vx + rt12 * vy + rt13 * vz;
-            self.set_flag(Flag::MAC1PosOvf, mac1 > 0x7FF_FFFF_FFFF);
-            self.set_flag(Flag::MAC1NegOvf, mac1 < -0x800_0000_0000);
-            let mac1 = (mac1 >> shift) as i32;
-            self.regs[MAC1.idx()] = mac1 as u32;
-            // TODO: reduce branches
-            let ir1 = if mac1 > 0x7FFF {
-                self.insert_flag(Flag::IR1Sat);
-                0x7FFF_i16
-            } else if mac1 < -0x8000 {
-                self.set_flag(Flag::IR1Sat, if ir_unsigned {mac1 < 0} else {true});
-                -0x8000_i16
-            } else {
-                mac1 as i16
-            };
-            self.regs[IR1.idx()] = ir1 as u32; // TODO: sign extend?
-            ir1 as i64
+            self.set_ir1(shift, ir_unsigned, mac1)
         };
         let ir2 = {
             let rt21 = self.get_control_i16_lo(RT13_21) as i64;
@@ -318,21 +375,7 @@ impl GTE {
             let rt23 = self.get_control_i16_lo(RT22_23) as i64;
             let _try = self.get_control_i32(TRY) as i64;
             let mac2 = (_try << 12) + rt21 * vx + rt22 * vy + rt23 * vz;
-            self.set_flag(Flag::MAC2PosOvf, mac2 > 0x7FF_FFFF_FFFF);
-            self.set_flag(Flag::MAC2NegOvf, mac2 < -0x800_0000_0000);
-            let mac2 = (mac2 >> shift) as i32;
-            self.regs[MAC2.idx()] = mac2 as u32;
-            let ir2 = if mac2 > 0x7FFF {
-                self.insert_flag(Flag::IR2Sat);
-                0x7FFF_i16
-            } else if mac2 < -0x8000 {
-                self.set_flag(Flag::IR2Sat, if ir_unsigned {mac2 < 0} else {true});
-                -0x8000_i16
-            } else {
-                mac2 as i16
-            };
-            self.regs[IR2.idx()] = ir2 as u32; // TODO: sign extend?
-            ir2 as i64
+            self.set_ir2(shift, ir_unsigned, mac2)
         };
         let sz3 = {
             let rt31 = self.get_control_i16_hi(RT31_32) as i64;
@@ -340,20 +383,7 @@ impl GTE {
             let rt33 = self.get_control_i16_hi(RT33) as i64;
             let trz = self.get_control_i32(TRZ) as i64;
             let mac3 = (trz << 12) + rt31 * vx + rt32 * vy + rt33 * vz;
-            self.set_flag(Flag::MAC3PosOvf, mac3 > 0x7FF_FFFF_FFFF);
-            self.set_flag(Flag::MAC3NegOvf, mac3 < -0x800_0000_0000);
-            let mac3 = (mac3 >> shift) as i32;
-            self.regs[MAC3.idx()] = mac3 as u32;
-            let ir3 = if mac3 > 0x7FFF {
-                self.insert_flag(Flag::IR3Sat);
-                0x7FFF_i16
-            } else if mac3 < -0x8000 {
-                self.set_flag(Flag::IR3Sat, if ir_unsigned {mac3 < 0} else {true});
-                -0x8000_i16
-            } else {
-                mac3 as i16
-            };
-            self.regs[IR3.idx()] = ir3 as u32; // TODO: sign extend?
+            let mac3 = self.set_ir3(shift, ir_unsigned, mac3);
             let sz3 = mac3.clamp(0, 0xFFFF);
             self.regs[SZ3.idx()] = sz3 as u32;
             self.set_flag(Flag::SZ3Sat, (mac3 as u32) > 0xFFFF);
@@ -478,8 +508,19 @@ impl GTE {
     }
 
     /// Outer product
-    fn op(&mut self) {
-
+    fn op(&mut self, shift: u8, ir_unsigned: bool) {
+        let ir1 = self.get_reg_i16_lo(Reg::IR1) as i64;
+        let ir2 = self.get_reg_i16_lo(Reg::IR2) as i64;
+        let ir3 = self.get_reg_i16_lo(Reg::IR3) as i64;
+        let d1 = self.get_control_i16_hi(Control::RT11_12) as i64;
+        let d2 = self.get_control_i16_hi(Control::RT22_23) as i64;
+        let d3 = self.get_control_i16_lo(Control::RT33) as i64;
+        let mac1 = d2 * ir3 - d3 * ir2;
+        self.set_ir1(shift, ir_unsigned, mac1);
+        let mac2 = d3 * ir1 - d1 * ir3;
+        self.set_ir2(shift, ir_unsigned, mac2);
+        let mac3 = d1 * ir2 - d2 * ir1;
+        self.set_ir3(shift, ir_unsigned, mac3);
     }
 
     /// Depth cueing (single).
@@ -498,8 +539,90 @@ impl GTE {
     }
 
     /// Multiply vector by matrix and add.
-    fn mvmva(&mut self) {
-
+    fn mvmva(&mut self, shift: u8, ir_unsigned: bool, mul_mat: u8, mul_vec: u8, trans_vec: u8) {
+        use Reg::*;
+        use Control::*;
+        let m_vec = match mul_vec {
+            0 => [
+                self.get_reg_i16_lo(VXY0) as i64,
+                self.get_reg_i16_hi(VXY0) as i64,
+                self.get_reg_i16_lo(VZ0) as i64,
+            ],
+            1 => [
+                self.get_reg_i16_lo(VXY1) as i64,
+                self.get_reg_i16_hi(VXY1) as i64,
+                self.get_reg_i16_lo(VZ1) as i64,
+            ],
+            2 => [
+                self.get_reg_i16_lo(VXY2) as i64,
+                self.get_reg_i16_hi(VXY2) as i64,
+                self.get_reg_i16_lo(VZ2) as i64,
+            ],
+            3 => [
+                self.get_reg_i16_lo(IR1) as i64,
+                self.get_reg_i16_hi(IR2) as i64,
+                self.get_reg_i16_lo(IR3) as i64,
+            ],
+            _ => unreachable!()
+        };
+        let mat = match mul_mat {
+            0 => [ // Rotation
+                self.get_control_i16_hi(RT11_12) as i64,
+                self.get_control_i16_lo(RT11_12) as i64,
+                self.get_control_i16_hi(RT13_21) as i64,
+                self.get_control_i16_lo(RT13_21) as i64,
+                self.get_control_i16_hi(RT22_23) as i64,
+                self.get_control_i16_lo(RT22_23) as i64,
+                self.get_control_i16_hi(RT31_32) as i64,
+                self.get_control_i16_lo(RT31_32) as i64,
+                self.get_control_i16_hi(RT33) as i64
+            ],
+            1 => [ // Light
+                self.get_control_i16_hi(L11_12) as i64,
+                self.get_control_i16_lo(L11_12) as i64,
+                self.get_control_i16_hi(L13_21) as i64,
+                self.get_control_i16_lo(L13_21) as i64,
+                self.get_control_i16_hi(L22_23) as i64,
+                self.get_control_i16_lo(L22_23) as i64,
+                self.get_control_i16_hi(L31_32) as i64,
+                self.get_control_i16_lo(L31_32) as i64,
+                self.get_control_i16_hi(L33) as i64
+            ],
+            2 => [ // Color
+                self.get_control_i16_hi(LR1R2) as i64,
+                self.get_control_i16_lo(LR1R2) as i64,
+                self.get_control_i16_hi(LR3G1) as i64,
+                self.get_control_i16_lo(LR3G1) as i64,
+                self.get_control_i16_hi(LG2G3) as i64,
+                self.get_control_i16_lo(LG2G3) as i64,
+                self.get_control_i16_hi(LB1B2) as i64,
+                self.get_control_i16_lo(LB1B2) as i64,
+                self.get_control_i16_hi(LB3) as i64
+            ],
+            3 => panic!("can't use mat 3"),
+            _ => unreachable!()
+        };
+        let t_vec = match trans_vec {
+            0 => [
+                self.get_control_i32(TRX) as i64,
+                self.get_control_i32(TRY) as i64,
+                self.get_control_i32(TRZ) as i64,
+            ],
+            1 => [
+                self.get_control_i32(RBK) as i64,
+                self.get_control_i32(GBK) as i64,
+                self.get_control_i32(BBK) as i64,
+            ],
+            2 => panic!("can't use trans vec 2"),
+            3 => [0, 0, 0],
+            _ => unreachable!()
+        };
+        let mac1 = m_vec[0] * mat[0] + m_vec[1] * mat[3] + m_vec[2] * mat[6] + (t_vec[0] << 12);
+        self.set_ir1(shift, ir_unsigned, mac1);
+        let mac2 = m_vec[0] * mat[1] + m_vec[1] * mat[4] + m_vec[2] * mat[7] + (t_vec[1] << 12);
+        self.set_ir2(shift, ir_unsigned, mac2);
+        let mac3 = m_vec[0] * mat[2] + m_vec[1] * mat[5] + m_vec[2] * mat[8] + (t_vec[2] << 12);
+        self.set_ir3(shift, ir_unsigned, mac3);
     }
 
     /// Normal color depth cue (single).
@@ -543,8 +666,16 @@ impl GTE {
     }
 
     /// Square IR.
-    fn sqr(&mut self) {
-
+    fn sqr(&mut self, shift: u8, ir_unsigned: bool) {
+        let ir1 = self.get_reg_i16_lo(Reg::IR1) as i64;
+        let ir2 = self.get_reg_i16_lo(Reg::IR2) as i64;
+        let ir3 = self.get_reg_i16_lo(Reg::IR3) as i64;
+        let mac1 = ir1 * ir1;
+        self.set_ir1(shift, ir_unsigned, mac1);
+        let mac2 = ir2 * ir2;
+        self.set_ir2(shift, ir_unsigned, mac2);
+        let mac3 = ir3 * ir3;
+        self.set_ir3(shift, ir_unsigned, mac3);
     }
 
     /// Depth cue color light.
