@@ -33,16 +33,27 @@ impl Coprocessor for GTE {
     }
 
     fn move_from_reg(&mut self, reg: usize) -> u32 {
-        if reg == Reg::LZCR.idx() { // Count leading zeros / ones function.
-            let lzcs = self.regs[Reg::LZCS.idx()];
-            lzcs.leading_ones() | lzcs.leading_zeros()
+        use Reg::*;
+        if reg == LZCR.idx() {
+            self.count_leading_zeros()
+        } else if reg == SXYP.idx() {
+            self.regs[SXY2.idx()]
+        } else if reg == IRGB.idx() || reg == ORGB.idx() {
+            self.color_convert_out()
         } else {
             self.regs[reg]
         }
     }
 
     fn move_to_reg(&mut self, reg: usize, data: u32) {
-        self.regs[reg] = data;
+        use Reg::*;
+        if reg == SXYP.idx() {
+            self.push_sxy_stack(data);
+        } else if reg == IRGB.idx() {
+            self.color_convert_in(data);
+        } else {
+            self.regs[reg] = data;
+        }
     }
 
     fn operation(&mut self, instr: u32) {
@@ -52,22 +63,22 @@ impl Coprocessor for GTE {
             (instr & MASK) as u8
         };
         // If bit 19 is set, shift left by 12.
-        let shift = || -> u8 {
+        let shift = {
             const MASK: u32 = 0x0008_0000;
             const SHIFT: usize = 19 - 12;
             ((instr & MASK) >> SHIFT) as u8
         };
-        let ir_unsigned = || -> bool {
+        let ir_unsigned = {
             const MASK: u32 = 0x0000_0400;
             const SHIFT: usize = 10;
             ((instr & MASK) >> SHIFT) == 1
         };
         match op {
-            0x01 => self.rtps(shift(), ir_unsigned()),
+            0x01 => self.rtps(shift, ir_unsigned),
             0x06 => self.nclip(),
-            0x0C => self.op(shift(), ir_unsigned()),
-            0x10 => self.dpcs(shift(), ir_unsigned()),
-            0x11 => self.intpl(shift(), ir_unsigned()),
+            0x0C => self.op(shift, ir_unsigned),
+            0x10 => self.dpcs(shift, ir_unsigned),
+            0x11 => self.intpl(shift, ir_unsigned),
             0x12 => {
                 let mul_mat = {
                     const MASK: u32 = 0x0006_0000;
@@ -84,24 +95,24 @@ impl Coprocessor for GTE {
                     const SHIFT: usize = 13;
                     ((instr & MASK) >> SHIFT) as u8
                 };
-                self.mvmva(shift(), ir_unsigned(), mul_mat, mul_vec, trans_vec)
+                self.mvmva(shift, ir_unsigned, mul_mat, mul_vec, trans_vec)
             },
-            0x13 => self.ncds(shift(), ir_unsigned()),
-            0x14 => self.cdp(shift(), ir_unsigned()),
-            0x16 => self.ncdt(shift(), ir_unsigned()),
-            0x1B => self.nccs(shift(), ir_unsigned()),
-            0x1C => self.cc(shift(), ir_unsigned()),
-            0x1E => self.ncs(shift(), ir_unsigned()),
-            0x20 => self.nct(shift(), ir_unsigned()),
-            0x28 => self.sqr(shift(), ir_unsigned()),
-            0x29 => self.dcpl(shift(), ir_unsigned()),
-            0x2A => self.dpct(shift(), ir_unsigned()),
+            0x13 => self.ncds(shift, ir_unsigned),
+            0x14 => self.cdp(shift, ir_unsigned),
+            0x16 => self.ncdt(shift, ir_unsigned),
+            0x1B => self.nccs(shift, ir_unsigned),
+            0x1C => self.cc(shift, ir_unsigned),
+            0x1E => self.ncs(shift, ir_unsigned),
+            0x20 => self.nct(shift, ir_unsigned),
+            0x28 => self.sqr(shift, ir_unsigned),
+            0x29 => self.dcpl(shift, ir_unsigned),
+            0x2A => self.dpct(shift, ir_unsigned),
             0x2D => self.avsz3(),
             0x2E => self.avsz4(),
-            0x30 => self.rtpt(shift(), ir_unsigned()),
-            0x3D => self.gpf(),
-            0x3E => self.gpl(),
-            0x3F => self.ncct(shift(), ir_unsigned()),
+            0x30 => self.rtpt(shift, ir_unsigned),
+            0x3D => self.gpf(shift, ir_unsigned),
+            0x3E => self.gpl(shift, ir_unsigned),
+            0x3F => self.ncct(shift, ir_unsigned),
             _ => {}, // Undefined
         }
     }
@@ -131,7 +142,7 @@ enum Reg {
     RGB0,
     RGB1,
     RGB2,
-    RES1,
+    _RES1,
     MAC0,
     MAC1,
     MAC2,
@@ -143,6 +154,7 @@ enum Reg {
 }
 
 impl Reg {
+    #[inline(always)]
     fn idx(self) -> usize {
         self as usize
     }
@@ -554,35 +566,48 @@ impl GTE {
         mac3.clamp(0, 0xFF) as u32
     }
 
-    /// Multiply RGB with IR values, saturate, and push to stack.
-    fn color_color(&mut self, shift: u8, ir_unsigned: bool, mac1: i32, mac2: i32, mac3: i32) {
-        use Reg::*;
-        let rgbc = self.regs[RGBC.idx()];
+    /// Extract RGB from mac1,2,3 and push to stack.
+    fn push_mac_color(&mut self, ir_unsigned: bool, rgbc: u32, mac1: i32, mac2: i32, mac3: i32) {
         let r = {
-            let r = ((rgbc >> 16) & 0xFF) as i64;
-            let ir1 = self.set_ir1(mac1, ir_unsigned);
-            let mac1 = self.set_mac1(ir1 * r, shift) >> 4;
             self.set_ir1(mac1, ir_unsigned);
-            self.set_flag(Flag::ColRSat, mac1 > 0xFF);
-            mac1.clamp(0, 0xFF) as u32
+            let r = mac1 >> 4;
+            self.set_flag(Flag::ColRSat, r > 0xFF);
+            r.clamp(0, 0xFF) as u32
         };
         let g = {
-            let g = ((rgbc >> 8) & 0xFF) as i64;
-            let ir2 = self.set_ir2(mac2, ir_unsigned);
-            let mac2 = self.set_mac2(ir2 * g, shift) >> 4;
             self.set_ir2(mac2, ir_unsigned);
-            self.set_flag(Flag::ColGSat, mac2 > 0xFF);
-            mac2.clamp(0, 0xFF) as u32
+            let g = mac2 >> 4;
+            self.set_flag(Flag::ColGSat, g > 0xFF);
+            g.clamp(0, 0xFF) as u32
         };
         let b = {
-            let b = (rgbc & 0xFF) as i64;
-            let ir3 = self.set_ir3(mac3, ir_unsigned);
-            let mac3 = self.set_mac3(ir3 * b, shift) >> 4;
             self.set_ir3(mac3, ir_unsigned);
-            self.set_flag(Flag::ColBSat, mac3 > 0xFF);
-            mac3.clamp(0, 0xFF) as u32
+            let b = mac3 >> 4;
+            self.set_flag(Flag::ColBSat, b > 0xFF);
+            b.clamp(0, 0xFF) as u32
         };
         self.push_color(rgbc, r, g, b);
+    }
+
+    /// Multiply RGB with IR values, saturate, and push to stack.
+    fn color_color(&mut self, shift: u8, ir_unsigned: bool, mac1: i32, mac2: i32, mac3: i32) {
+        let rgbc = self.regs[Reg::RGBC.idx()];
+        let mac1 = {
+            let r = ((rgbc >> 16) & 0xFF) as i64;
+            let ir1 = self.set_ir1(mac1, ir_unsigned);
+            self.set_mac1(ir1 * r, shift)
+        };
+        let mac2 = {
+            let g = ((rgbc >> 8) & 0xFF) as i64;
+            let ir2 = self.set_ir2(mac2, ir_unsigned);
+            self.set_mac2(ir2 * g, shift)
+        };
+        let mac3 = {
+            let b = (rgbc & 0xFF) as i64;
+            let ir3 = self.set_ir3(mac3, ir_unsigned);
+            self.set_mac3(ir3 * b, shift)
+        };
+        self.push_mac_color(ir_unsigned, rgbc, mac1, mac2, mac3);
     }
 
     /// Multiply RGB with IR values, depth queue, saturate, and push to stack.
@@ -669,28 +694,9 @@ impl GTE {
     /// Normal * color calculation.
     /// Shifts color FIFO.
     fn normal_color(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) {
-        use Reg::*;
         let [ir1, ir2, ir3] = self.light_dir_mul(shift, ir_unsigned, nx, ny, nz);
         let [mac1, mac2, mac3] = self.color_mat_mul(shift, ir1, ir2, ir3);
-        let r = {
-            self.set_ir1(mac1, ir_unsigned);
-            let r = mac1 >> 4;
-            self.set_flag(Flag::ColRSat, r > 0xFF);
-            r.clamp(0, 0xFF) as u32
-        };
-        let g = {
-            self.set_ir2(mac2, ir_unsigned);
-            let g = mac2 >> 4;
-            self.set_flag(Flag::ColGSat, g > 0xFF);
-            g.clamp(0, 0xFF) as u32
-        };
-        let b = {
-            self.set_ir3(mac3, ir_unsigned);
-            let b = mac3 >> 4;
-            self.set_flag(Flag::ColBSat, b > 0xFF);
-            b.clamp(0, 0xFF) as u32
-        };
-        self.push_color(self.regs[RGBC.idx()], r, g, b);
+        self.push_mac_color(ir_unsigned, self.regs[Reg::RGBC.idx()], mac1, mac2, mac3);
     }
 
     /// Normal * color calculation, with color factor.
@@ -731,6 +737,42 @@ impl GTE {
             self.bfc_interpolate(shift, ir_unsigned, mac3, ir0)
         };
         self.push_color(rgbc, r, g, b);
+    }
+}
+
+// Register read/write commands.
+impl GTE {
+    fn push_sxy_stack(&mut self, data: u32) {
+        use Reg::*;
+        self.regs[SXY0.idx()] = self.regs[SXY1.idx()];
+        self.regs[SXY1.idx()] = self.regs[SXY2.idx()];
+        self.regs[SXY2.idx()] = data;
+    }
+
+    fn color_convert_in(&mut self, data: u32) {
+        use Reg::*;
+        let r = data & 0x1F;
+        self.regs[IR1.idx()] = r << 7;
+        let g = (data >> 5) & 0x1F;
+        self.regs[IR2.idx()] = g << 7;
+        let b = (data >> 10) & 0x1F;
+        self.regs[IR3.idx()] = b << 7;
+    }
+
+    fn color_convert_out(&mut self) -> u32 {
+        use Reg::*;
+        let ir1 = self.regs[IR1.idx()] as i32;
+        let r = (ir1 >> 7).clamp(0, 0x1F) as u32;
+        let ir2 = self.regs[IR2.idx()] as i32;
+        let g = (ir2 >> 7).clamp(0, 0x1F) as u32;
+        let ir3 = self.regs[IR3.idx()] as i32;
+        let b = (ir3 >> 7).clamp(0, 0x1F) as u32;
+        r | (g << 5) | (b << 5)
+    }
+
+    fn count_leading_zeros(&mut self) -> u32 {
+        let lzcs = self.regs[Reg::LZCS.idx()];
+        lzcs.leading_ones() | lzcs.leading_zeros()
     }
 }
 
@@ -1070,12 +1112,31 @@ impl GTE {
     }
 
     /// General purpose interpolation.
-    fn gpf(&mut self) {
-
+    fn gpf(&mut self, shift: u8, ir_unsigned: bool) {
+        use Reg::*;
+        let ir0 = self.get_reg_i16_lo(IR0) as i64;
+        let ir1 = self.get_reg_i16_lo(IR1) as i64;
+        let ir2 = self.get_reg_i16_lo(IR2) as i64;
+        let ir3 = self.get_reg_i16_lo(IR3) as i64;
+        let mac1 = self.set_mac1(ir1 * ir0, shift);
+        let mac2 = self.set_mac2(ir2 * ir0, shift);
+        let mac3 = self.set_mac3(ir3 * ir0, shift);
+        self.push_mac_color(ir_unsigned, self.regs[RGBC.idx()], mac1, mac2, mac3);
     }
 
     /// General purpose interpolation with base.
-    fn gpl(&mut self) {
-
+    fn gpl(&mut self, shift: u8, ir_unsigned: bool) {
+        use Reg::*;
+        let ir0 = self.get_reg_i16_lo(IR0) as i64;
+        let ir1 = self.get_reg_i16_lo(IR1) as i64;
+        let ir2 = self.get_reg_i16_lo(IR2) as i64;
+        let ir3 = self.get_reg_i16_lo(IR3) as i64;
+        let mac1 = self.get_reg_i32(MAC1) as i64;
+        let mac2 = self.get_reg_i32(MAC1) as i64;
+        let mac3 = self.get_reg_i32(MAC1) as i64;
+        let mac1 = self.set_mac1((ir1 * ir0) + (mac1 << shift), shift);
+        let mac2 = self.set_mac2((ir2 * ir0) + (mac2 << shift), shift);
+        let mac3 = self.set_mac3((ir3 * ir0) + (mac3 << shift), shift);
+        self.push_mac_color(ir_unsigned, self.regs[RGBC.idx()], mac1, mac2, mac3);
     }
 }
