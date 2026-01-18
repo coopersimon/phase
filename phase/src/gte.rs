@@ -767,7 +767,7 @@ impl GTE {
         let g = (ir2 >> 7).clamp(0, 0x1F) as u32;
         let ir3 = self.regs[IR3.idx()] as i32;
         let b = (ir3 >> 7).clamp(0, 0x1F) as u32;
-        r | (g << 5) | (b << 5)
+        r | (g << 5) | (b << 10)
     }
 
     fn count_leading_zeros(&mut self) -> u32 {
@@ -1132,8 +1132,8 @@ impl GTE {
         let ir2 = self.get_reg_i16_lo(IR2) as i64;
         let ir3 = self.get_reg_i16_lo(IR3) as i64;
         let mac1 = self.get_reg_i32(MAC1) as i64;
-        let mac2 = self.get_reg_i32(MAC1) as i64;
-        let mac3 = self.get_reg_i32(MAC1) as i64;
+        let mac2 = self.get_reg_i32(MAC2) as i64;
+        let mac3 = self.get_reg_i32(MAC3) as i64;
         let mac1 = self.set_mac1((ir1 * ir0) + (mac1 << shift), shift);
         let mac2 = self.set_mac2((ir2 * ir0) + (mac2 << shift), shift);
         let mac3 = self.set_mac3((ir3 * ir0) + (mac3 << shift), shift);
