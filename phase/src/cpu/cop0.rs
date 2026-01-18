@@ -9,7 +9,8 @@ bitflags::bitflags! {
         const InterruptPending = bits![8, 9, 10, 11, 12, 13, 14, 15];
         const ExCode = bits![2, 3, 4, 5, 6];
 
-        const Writable = bits![8, 9];
+        const Writable = bits![8, 9]; // Software interrupt bits
+        const HardwareInt = bits![10, 11, 12, 13, 14, 15];
     }
 }
 
@@ -59,13 +60,8 @@ impl SystemCoproc {
         }
     }
 
-    /// Externally set an interrupt bit.
-    pub fn set_interrupt(&mut self, _bit: u8) {
-
-    }
-
     /// Check if an interrupt has triggered.
-    pub fn check_interrupt(&self) -> bool {
+    fn check_interrupt(&self) -> bool {
         if self.system_status.contains(SystemStatus::CurrentIntEnable) {
             let mask = (self.system_status & SystemStatus::InterruptMask).bits();
             let irq = (self.exception_cause & ExceptionCause::InterruptPending).bits();
@@ -129,6 +125,13 @@ impl Coprocessor0 for SystemCoproc {
             0x8000_0080 // RAM
         }
     }
+
+    fn external_interrupt(&mut self, mask: u8) -> bool {
+        let external_pending = (mask as u32) << 8;
+        self.exception_cause.remove(ExceptionCause::HardwareInt);
+        self.exception_cause.insert(ExceptionCause::from_bits_truncate(external_pending));
+        self.check_interrupt()
+    }
 }
 
 // Internal stuff
@@ -155,7 +158,8 @@ impl SystemCoproc {
 
     fn push_int_stack(&mut self) {
         let stack = self.system_status & SystemStatus::IntStackTop;
-        self.system_status.remove(SystemStatus::IntStackBottom);
+        // Write 0 to stack: i.e. switch to kernel mode + disable interrupts.
+        self.system_status.remove(SystemStatus::IntStackBottom | SystemStatus::IntStackTop);
         self.system_status.insert(SystemStatus::from_bits_truncate(stack.bits() << 2));
     }
 

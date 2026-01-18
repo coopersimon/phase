@@ -7,6 +7,7 @@ use ram::RAM;
 use bios::BIOS;
 use control::MemControl;
 
+use crate::interrupt::InterruptControl;
 use crate::utils::interface::MemInterface;
 
 
@@ -14,7 +15,8 @@ pub struct MemBus {
     control: MemControl,
     main_ram: RAM,
     scratchpad: RAM,
-    bios: BIOS
+    bios: BIOS,
+    interrupts: InterruptControl,
 }
 
 impl MemBus {
@@ -24,7 +26,8 @@ impl MemBus {
             control: MemControl::new(),
             main_ram: RAM::new(2048 * 1024), // 2MB
             scratchpad: RAM::new(1024),
-            bios
+            bios,
+            interrupts: InterruptControl::new(),
         }
     }
 }
@@ -32,6 +35,14 @@ impl MemBus {
 impl Mem32 for MemBus {
     type Addr = u32;
     const LITTLE_ENDIAN: bool = true;
+
+    fn clock(&mut self, _cycles: usize) -> u8 {
+        if self.interrupts.check_interrupt() {
+            0x04
+        } else {
+            0x00
+        }
+    }
 
     fn read_byte(&mut self, addr: Self::Addr) -> u8 {
         match addr {
@@ -71,7 +82,7 @@ impl MemBus {
             0x1F80_1000..=0x1F80_1023 => Some(&mut self.control),
             0x1F80_1040..=0x1F80_105F => None, // Peripheral
             0x1F80_1060..=0x1F80_1063 => Some(&mut self.control),
-            0x1F80_1070..=0x1F80_1077 => None, // Interrupt
+            0x1F80_1070..=0x1F80_1077 => Some(&mut self.interrupts),
             0x1F80_1080..=0x1F80_10FF => None, // DMA
             0x1F80_1100..=0x1F80_1129 => None, // Timers
             0x1F80_1800..=0x1F80_1803 => None, // CD-ROM
