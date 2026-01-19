@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod test;
+
 use mips::coproc::Coprocessor;
 use crate::utils::bits::*;
 
@@ -426,27 +429,27 @@ impl GTE {
         self.regs[SXY0.idx()] = self.regs[SXY1.idx()];
         self.regs[SXY1.idx()] = self.regs[SXY2.idx()];
         let ir1 = {
-            let rt11 = self.get_control_i16_hi(RT11_12) as i64;
-            let rt12 = self.get_control_i16_lo(RT11_12) as i64;
-            let rt13 = self.get_control_i16_hi(RT13_21) as i64;
+            let rt11 = self.get_control_i16_lo(RT11_12) as i64;
+            let rt12 = self.get_control_i16_hi(RT11_12) as i64;
+            let rt13 = self.get_control_i16_lo(RT13_21) as i64;
             let trx = self.get_control_i32(TRX) as i64;
             let mac1 = (trx << 12) + rt11 * vx + rt12 * vy + rt13 * vz;
             let mac1 = self.set_mac1(mac1, shift);
             self.set_ir1(mac1, ir_unsigned)
         };
         let ir2 = {
-            let rt21 = self.get_control_i16_lo(RT13_21) as i64;
-            let rt22 = self.get_control_i16_hi(RT22_23) as i64;
-            let rt23 = self.get_control_i16_lo(RT22_23) as i64;
+            let rt21 = self.get_control_i16_hi(RT13_21) as i64;
+            let rt22 = self.get_control_i16_lo(RT22_23) as i64;
+            let rt23 = self.get_control_i16_hi(RT22_23) as i64;
             let _try = self.get_control_i32(TRY) as i64;
             let mac2 = (_try << 12) + rt21 * vx + rt22 * vy + rt23 * vz;
             let mac2 = self.set_mac2(mac2, shift);
             self.set_ir2(mac2, ir_unsigned)
         };
         let sz3 = {
-            let rt31 = self.get_control_i16_hi(RT31_32) as i64;
-            let rt32 = self.get_control_i16_lo(RT31_32) as i64;
-            let rt33 = self.get_control_i16_hi(RT33) as i64;
+            let rt31 = self.get_control_i16_lo(RT31_32) as i64;
+            let rt32 = self.get_control_i16_hi(RT31_32) as i64;
+            let rt33 = self.get_control_i16_lo(RT33) as i64;
             let trz = self.get_control_i32(TRZ) as i64;
             let mac3 = (trz << 12) + rt31 * vx + rt32 * vy + rt33 * vz;
             let mac3 = self.set_mac3(mac3, shift);
@@ -514,7 +517,6 @@ impl GTE {
             self.set_mac0(mac0);
             mac0 as i32 // TODO: clip or shift by 12?
         };
-        self.regs[MAC0.idx()] = mac0 as u32;
         let ir0 = {
             let ir0 = mac0 >> 12;
             if ir0 > 0x1000 {
@@ -538,7 +540,7 @@ impl GTE {
         let ir1 = self.set_ir1((((rfc << 12) - mac1) >> shift) as i32, false);
         let mac1 = self.set_mac1(ir1 * ir0 + mac1, shift);
         self.set_ir1(mac1, ir_unsigned);
-        self.set_flag(Flag::ColRSat, mac1 > 0xFF);
+        self.set_flag(Flag::ColRSat, (mac1 as u32) > 0xFF);
         mac1.clamp(0, 0xFF) as u32
     }
 
@@ -550,7 +552,7 @@ impl GTE {
         let ir2 = self.set_ir2((((gfc << 12) - mac2) >> shift) as i32, false);
         let mac2 = self.set_mac2(ir2 * ir0 + mac2, shift);
         self.set_ir2(mac2, ir_unsigned);
-        self.set_flag(Flag::ColGSat, mac2 > 0xFF);
+        self.set_flag(Flag::ColGSat, (mac2 as u32) > 0xFF);
         mac2.clamp(0, 0xFF) as u32
     }
 
@@ -562,7 +564,7 @@ impl GTE {
         let ir3 = self.set_ir3((((bfc << 12) - mac3) >> shift) as i32, false);
         let mac3 = self.set_mac3(ir3 * ir0 + mac3, shift);
         self.set_ir3(mac3, ir_unsigned);
-        self.set_flag(Flag::ColBSat, mac3 > 0xFF);
+        self.set_flag(Flag::ColBSat, (mac3 as u32) > 0xFF);
         mac3.clamp(0, 0xFF) as u32
     }
 
@@ -571,19 +573,19 @@ impl GTE {
         let r = {
             self.set_ir1(mac1, ir_unsigned);
             let r = mac1 >> 4;
-            self.set_flag(Flag::ColRSat, r > 0xFF);
+            self.set_flag(Flag::ColRSat, (r as u32) > 0xFF);
             r.clamp(0, 0xFF) as u32
         };
         let g = {
             self.set_ir2(mac2, ir_unsigned);
             let g = mac2 >> 4;
-            self.set_flag(Flag::ColGSat, g > 0xFF);
+            self.set_flag(Flag::ColGSat, (g as u32) > 0xFF);
             g.clamp(0, 0xFF) as u32
         };
         let b = {
             self.set_ir3(mac3, ir_unsigned);
             let b = mac3 >> 4;
-            self.set_flag(Flag::ColBSat, b > 0xFF);
+            self.set_flag(Flag::ColBSat, (b as u32) > 0xFF);
             b.clamp(0, 0xFF) as u32
         };
         self.push_color(rgbc, r, g, b);
@@ -639,23 +641,23 @@ impl GTE {
     fn light_dir_mul(&mut self, shift: u8, ir_unsigned: bool, nx: i64, ny: i64, nz: i64) -> [i64; 3] {
         use Control::*;
         let ir1 = {
-            let l11 = self.get_control_i16_hi(L11_12) as i64;
-            let l12 = self.get_control_i16_lo(L11_12) as i64;
-            let l13 = self.get_control_i16_hi(L13_21) as i64;
+            let l11 = self.get_control_i16_lo(L11_12) as i64;
+            let l12 = self.get_control_i16_hi(L11_12) as i64;
+            let l13 = self.get_control_i16_lo(L13_21) as i64;
             let mac1 = self.set_mac1(l11 * nx + l12 * ny + l13 * nz, shift);
             self.set_ir1(mac1, ir_unsigned)
         };
         let ir2 = {
-            let l21 = self.get_control_i16_lo(L13_21) as i64;
-            let l22 = self.get_control_i16_hi(L22_23) as i64;
-            let l23 = self.get_control_i16_lo(L22_23) as i64;
+            let l21 = self.get_control_i16_hi(L13_21) as i64;
+            let l22 = self.get_control_i16_lo(L22_23) as i64;
+            let l23 = self.get_control_i16_hi(L22_23) as i64;
             let mac2 = self.set_mac2(l21 * nx + l22 * ny + l23 * nz, shift);
             self.set_ir2(mac2, ir_unsigned)
         };
         let ir3 = {
-            let l31 = self.get_control_i16_hi(L31_32) as i64;
-            let l32 = self.get_control_i16_lo(L31_32) as i64;
-            let l33 = self.get_control_i16_hi(L33) as i64;
+            let l31 = self.get_control_i16_lo(L31_32) as i64;
+            let l32 = self.get_control_i16_hi(L31_32) as i64;
+            let l33 = self.get_control_i16_lo(L33) as i64;
             let mac3 = self.set_mac3(l31 * nx + l32 * ny + l33 * nz, shift);
             self.set_ir3(mac3, ir_unsigned)
         };
@@ -668,23 +670,23 @@ impl GTE {
     fn color_mat_mul(&mut self, shift: u8, ir1: i64, ir2: i64, ir3: i64) -> [i32; 3] {
         use Control::*;
         let mac1 = {
-            let lr1 = self.get_control_i16_hi(LR1R2) as i64;
-            let lr2 = self.get_control_i16_lo(LR1R2) as i64;
-            let lr3 = self.get_control_i16_hi(LR3G1) as i64;
+            let lr1 = self.get_control_i16_lo(LR1R2) as i64;
+            let lr2 = self.get_control_i16_hi(LR1R2) as i64;
+            let lr3 = self.get_control_i16_lo(LR3G1) as i64;
             let rbk = self.get_control_i32(RBK) as i64;
             self.set_mac1(lr1 * ir1 + lr2 * ir2 + lr3 * ir3 + (rbk << 12), shift)
         };
         let mac2 = {
-            let lg1 = self.get_control_i16_lo(LR3G1) as i64;
-            let lg2 = self.get_control_i16_hi(LG2G3) as i64;
-            let lg3 = self.get_control_i16_lo(LG2G3) as i64;
+            let lg1 = self.get_control_i16_hi(LR3G1) as i64;
+            let lg2 = self.get_control_i16_lo(LG2G3) as i64;
+            let lg3 = self.get_control_i16_hi(LG2G3) as i64;
             let gbk = self.get_control_i32(GBK) as i64;
             self.set_mac2(lg1 * ir1 + lg2 * ir2 + lg3 * ir3 + (gbk << 12), shift)
         };
         let mac3 = {
-            let lb1 = self.get_control_i16_hi(LB1B2) as i64;
-            let lb2 = self.get_control_i16_lo(LB1B2) as i64;
-            let lb3 = self.get_control_i16_hi(LB3) as i64;
+            let lb1 = self.get_control_i16_lo(LB1B2) as i64;
+            let lb2 = self.get_control_i16_hi(LB1B2) as i64;
+            let lb3 = self.get_control_i16_lo(LB3) as i64;
             let bbk = self.get_control_i32(BBK) as i64;
             self.set_mac3(lb1 * ir1 + lb2 * ir2 + lb3 * ir3 + (bbk << 12), shift)
         };
@@ -824,8 +826,8 @@ impl GTE {
         let ir1 = self.get_reg_i16_lo(Reg::IR1) as i64;
         let ir2 = self.get_reg_i16_lo(Reg::IR2) as i64;
         let ir3 = self.get_reg_i16_lo(Reg::IR3) as i64;
-        let d1 = self.get_control_i16_hi(Control::RT11_12) as i64;
-        let d2 = self.get_control_i16_hi(Control::RT22_23) as i64;
+        let d1 = self.get_control_i16_lo(Control::RT11_12) as i64;
+        let d2 = self.get_control_i16_lo(Control::RT22_23) as i64;
         let d3 = self.get_control_i16_lo(Control::RT33) as i64;
         let mac1 = self.set_mac1(d2 * ir3 - d3 * ir2, shift);
         self.set_ir1(mac1, ir_unsigned);
@@ -909,37 +911,37 @@ impl GTE {
         };
         let mat = match mul_mat {
             0 => [ // Rotation
-                self.get_control_i16_hi(RT11_12) as i64,
                 self.get_control_i16_lo(RT11_12) as i64,
-                self.get_control_i16_hi(RT13_21) as i64,
+                self.get_control_i16_hi(RT11_12) as i64,
                 self.get_control_i16_lo(RT13_21) as i64,
-                self.get_control_i16_hi(RT22_23) as i64,
+                self.get_control_i16_hi(RT13_21) as i64,
                 self.get_control_i16_lo(RT22_23) as i64,
-                self.get_control_i16_hi(RT31_32) as i64,
+                self.get_control_i16_hi(RT22_23) as i64,
                 self.get_control_i16_lo(RT31_32) as i64,
-                self.get_control_i16_hi(RT33) as i64
+                self.get_control_i16_hi(RT31_32) as i64,
+                self.get_control_i16_lo(RT33) as i64
             ],
             1 => [ // Light
-                self.get_control_i16_hi(L11_12) as i64,
                 self.get_control_i16_lo(L11_12) as i64,
-                self.get_control_i16_hi(L13_21) as i64,
+                self.get_control_i16_hi(L11_12) as i64,
                 self.get_control_i16_lo(L13_21) as i64,
-                self.get_control_i16_hi(L22_23) as i64,
+                self.get_control_i16_hi(L13_21) as i64,
                 self.get_control_i16_lo(L22_23) as i64,
-                self.get_control_i16_hi(L31_32) as i64,
+                self.get_control_i16_hi(L22_23) as i64,
                 self.get_control_i16_lo(L31_32) as i64,
-                self.get_control_i16_hi(L33) as i64
+                self.get_control_i16_hi(L31_32) as i64,
+                self.get_control_i16_lo(L33) as i64
             ],
             2 => [ // Color
-                self.get_control_i16_hi(LR1R2) as i64,
                 self.get_control_i16_lo(LR1R2) as i64,
-                self.get_control_i16_hi(LR3G1) as i64,
+                self.get_control_i16_hi(LR1R2) as i64,
                 self.get_control_i16_lo(LR3G1) as i64,
-                self.get_control_i16_hi(LG2G3) as i64,
+                self.get_control_i16_hi(LR3G1) as i64,
                 self.get_control_i16_lo(LG2G3) as i64,
-                self.get_control_i16_hi(LB1B2) as i64,
+                self.get_control_i16_hi(LG2G3) as i64,
                 self.get_control_i16_lo(LB1B2) as i64,
-                self.get_control_i16_hi(LB3) as i64
+                self.get_control_i16_hi(LB1B2) as i64,
+                self.get_control_i16_lo(LB3) as i64
             ],
             3 => panic!("can't use mat 3"),
             _ => unreachable!()
@@ -1140,3 +1142,4 @@ impl GTE {
         self.push_mac_color(ir_unsigned, self.regs[RGBC.idx()], mac1, mac2, mac3);
     }
 }
+
