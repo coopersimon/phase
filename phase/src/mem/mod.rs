@@ -1,11 +1,13 @@
 mod ram;
 mod bios;
 mod control;
+mod dma;
 
 use mips::mem::Mem32;
 use ram::RAM;
 use bios::BIOS;
 use control::MemControl;
+use dma::DMA;
 
 use crate::interrupt::InterruptControl;
 use crate::timer::Timers;
@@ -20,6 +22,7 @@ pub struct MemBus {
     interrupts: InterruptControl,
 
     timers: Timers,
+    dma: DMA,
 }
 
 impl MemBus {
@@ -33,6 +36,35 @@ impl MemBus {
             interrupts: InterruptControl::new(),
 
             timers: Timers::new(),
+            dma: DMA::new(),
+        }
+    }
+
+    /// Clock internally, and set interrupt bits.
+    fn do_clock(&mut self, cycles: usize) {
+        let hblank = false;
+        let vblank = false;
+
+        let dma_irq = self.dma.check_irq();
+
+        let timer_irq = self.timers.clock(cycles, hblank, vblank);
+
+        self.interrupts.trigger_irq(
+            dma_irq |
+            timer_irq
+        );
+
+    }
+
+    /// Do DMA transfers, if any are ready.
+    /// 
+    /// This will take control from the CPU and clock until the
+    /// DMA transfers are complete.
+    fn do_dma(&mut self) {
+        while let Some(transfer) = self.dma.get_transfer() {
+            let data = self.read_word(transfer.src_addr);
+            self.write_word(transfer.dst_addr, data);
+            // TODO: do_clock?
         }
     }
 }
@@ -42,15 +74,11 @@ impl Mem32 for MemBus {
     const LITTLE_ENDIAN: bool = true;
 
     fn clock(&mut self, cycles: usize) -> u8 {
-        let hblank = false;
-        let vblank = false;
+        self.do_clock(cycles);
 
-        let timer_irq = self.timers.clock(cycles, hblank, vblank);
+        self.do_dma();
 
-        let irq = self.interrupts.trigger_interrupt(
-            timer_irq
-        );
-        if irq {
+        if self.interrupts.check_irq() {
             0x04 // Interrupt bit 2 is used for all external hardware IRQs.
         } else {
             0x00
@@ -96,7 +124,7 @@ impl MemBus {
             0x1F80_1040..=0x1F80_105F => None, // Peripheral
             0x1F80_1060..=0x1F80_1063 => Some(&mut self.control),
             0x1F80_1070..=0x1F80_1077 => Some(&mut self.interrupts),
-            0x1F80_1080..=0x1F80_10FF => None, // DMA
+            0x1F80_1080..=0x1F80_10FF => Some(&mut self.dma),
             0x1F80_1100..=0x1F80_1129 => Some(&mut self.timers),
             0x1F80_1800..=0x1F80_1803 => None, // CD-ROM
             0x1F80_1810..=0x1F80_1817 => None, // GPU
