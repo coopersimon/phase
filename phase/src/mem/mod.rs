@@ -9,10 +9,10 @@ use bios::BIOS;
 use control::MemControl;
 use dma::DMA;
 
+use crate::utils::interface::MemInterface;
 use crate::interrupt::InterruptControl;
 use crate::timer::Timers;
-use crate::utils::interface::MemInterface;
-
+use crate::cdrom::CDROM;
 
 pub struct MemBus {
     control: MemControl,
@@ -23,11 +23,12 @@ pub struct MemBus {
 
     timers: Timers,
     dma: DMA,
+    cdrom: CDROM,
 }
 
 impl MemBus {
     pub fn new() -> Self {
-        let bios = BIOS::new();
+        let bios = BIOS::new(None).expect("error loading BIOS"); // TODO: handle error.
         Self {
             control: MemControl::new(),
             main_ram: RAM::new(2048 * 1024), // 2MB
@@ -37,6 +38,7 @@ impl MemBus {
 
             timers: Timers::new(),
             dma: DMA::new(),
+            cdrom: CDROM::new(),
         }
     }
 
@@ -49,9 +51,12 @@ impl MemBus {
 
         let timer_irq = self.timers.clock(cycles, hblank, vblank);
 
+        let cd_irq = self.cdrom.clock(cycles);
+
         self.interrupts.trigger_irq(
             dma_irq |
-            timer_irq
+            timer_irq |
+            cd_irq
         );
 
     }
@@ -89,14 +94,20 @@ impl Mem32 for MemBus {
         match addr {
             0x0000_0000..=0x007F_FFFF => self.main_ram.read_byte(addr & 0x1F_FFFF),
             0x1F80_0000..=0x1F80_03FF => self.scratchpad.read_byte(addr & 0x3FF),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.read_byte(addr)).unwrap_or_default(), // I/O
-            0x1FC0_0000..=0x1FC7_FFFF => self.bios.read_byte(addr & 0x7_FFFF), // BIOS
+            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.read_byte(addr)).unwrap_or_default(),
+            0x1FC0_0000..=0x1FC7_FFFF => self.bios.read_byte(addr & 0x7_FFFF),
             _ => panic!("read invalid address {:X}", addr),
         }
     }
 
     fn write_byte(&mut self, addr: Self::Addr, data: u8) {
-        
+        match addr {
+            0x0000_0000..=0x007F_FFFF => self.main_ram.write_byte(addr & 0x1F_FFFF, data),
+            0x1F80_0000..=0x1F80_03FF => self.scratchpad.write_byte(addr & 0x3FF, data),
+            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.write_byte(addr, data)).unwrap_or_default(),
+            0x1FC0_0000..=0x1FC7_FFFF => {}, // BIOS
+            _ => panic!("write invalid address {:X}", addr),
+        }
     }
 
     fn read_halfword(&mut self, addr: Self::Addr) -> u16 {
@@ -126,7 +137,7 @@ impl MemBus {
             0x1F80_1070..=0x1F80_1077 => Some(&mut self.interrupts),
             0x1F80_1080..=0x1F80_10FF => Some(&mut self.dma),
             0x1F80_1100..=0x1F80_1129 => Some(&mut self.timers),
-            0x1F80_1800..=0x1F80_1803 => None, // CD-ROM
+            0x1F80_1800..=0x1F80_1803 => Some(&mut self.cdrom),
             0x1F80_1810..=0x1F80_1817 => None, // GPU
             0x1F80_1820..=0x1F80_1827 => None, // MDEC
             0x1F80_1C00..=0x1F80_1C0F => None, // SPU

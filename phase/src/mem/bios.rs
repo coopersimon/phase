@@ -1,15 +1,31 @@
+use std::{
+    io::{
+        Result,
+        Read,
+        Seek,
+        SeekFrom
+    },
+    fs::File,
+    path::Path
+};
+
+const BIOS_SIZE: usize = 512 * 1024;
 
 pub struct BIOS {
     data: Vec<u8>
 }
 
 impl BIOS {
-    // TODO.
-    pub fn new() -> Self {
-        let data = vec![0; 512 * 1024];
-        Self {
-            data
+    pub fn new(path: Option<&Path>) -> Result<Self> {
+        let mut data = vec![0; BIOS_SIZE];
+        if let Some(path) = path {
+            let mut bios_file = File::open(path)?;
+            bios_file.seek(SeekFrom::Start(0))?;
+            bios_file.read(&mut data)?;
         }
+        Ok(Self {
+            data
+        })
     }
 }
 

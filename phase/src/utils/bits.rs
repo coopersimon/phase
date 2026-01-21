@@ -1,6 +1,6 @@
 macro_rules! bit {
     ($bit_num:expr) => {
-        1_u32 << $bit_num
+        1 << $bit_num
     };
 }
 
