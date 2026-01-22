@@ -47,6 +47,13 @@ pub struct SystemCoproc {
     exception_cause: ExceptionCause,
     exception_ret_addr: u32,
     bad_virtual_addr: u32,
+
+    // Breakpoints
+    break_exec_addr: u32,
+    break_exec_mask: u32,
+    break_data_addr: u32,
+    break_data_mask: u32,
+    break_control: u32,
 }
 
 impl SystemCoproc {
@@ -57,6 +64,12 @@ impl SystemCoproc {
             exception_cause: ExceptionCause::empty(),
             exception_ret_addr: 0,
             bad_virtual_addr: 0,
+
+            break_exec_addr: 0,
+            break_exec_mask: 0,
+            break_data_addr: 0,
+            break_data_mask: 0,
+            break_control: 0,
         }
     }
 
@@ -78,8 +91,13 @@ const PRID: u32 = 0x0000_0001;
 impl Coprocessor0 for SystemCoproc {
     fn move_from_reg(&mut self, reg: u8) -> u32 {
         match reg {
-            // TODO: others.
+            3 => self.break_exec_addr,
+            5 => self.break_data_addr,
+            6 => 0, // jump dest
+            7 => self.break_control,
             8 => self.bad_virtual_addr,
+            9 => self.break_data_mask,
+            11 => self.break_exec_mask,
             12 => self.system_status.bits(),
             13 => self.exception_cause.bits(),
             14 => self.exception_ret_addr,
@@ -90,9 +108,17 @@ impl Coprocessor0 for SystemCoproc {
 
     fn move_to_reg(&mut self, reg: u8, data: u32) {
         match reg {
-            // TODO: others.
-            12 => self.set_cause(data),
-            13 => self.set_status(data),
+            3 => self.break_exec_addr = data,
+            5 => self.break_data_addr = data,
+            6 => {},
+            7 => self.break_control = data,
+            8 => {},
+            9 => self.break_data_mask = data,
+            11 => self.break_exec_mask = data,
+            12 => self.set_status(data),
+            13 => self.set_cause(data),
+            14 => {},
+            15 => {},
             _ => panic!("Writing to undefined coproc reg {:X}", reg), // Undefined
         }
     }

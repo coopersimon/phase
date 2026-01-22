@@ -25,6 +25,8 @@ pub struct MemBus {
     timers: Timers,
     dma: DMA,
     cdrom: CDROM,
+
+    cache_control: u32,
 }
 
 impl MemBus {
@@ -40,6 +42,8 @@ impl MemBus {
             timers: Timers::new(),
             dma: DMA::new(),
             cdrom: CDROM::new(),
+
+            cache_control: 0,
         }
     }
 
@@ -91,67 +95,109 @@ impl Mem32 for MemBus {
     }
 
     fn read_byte(&mut self, addr: Self::Addr) -> u8 {
-        let addr = addr & 0x1FFF_FFFF;
-        match addr { // TODO: KSEG
-            0x0000_0000..=0x007F_FFFF => self.main_ram.read_byte(addr & 0x1F_FFFF),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.read_byte(addr & 0x3FF),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.read_byte(addr)).unwrap_or_default(),
-            0x1FC0_0000..=0x1FC7_FFFF => self.bios.read_byte(addr & 0x7_FFFF),
+        match addr {
+            0x0000_0000..=0x007F_FFFF |
+            0x8000_0000..=0x807F_FFFF |
+            0xA000_0000..=0xA07F_FFFF => self.main_ram.read_byte(addr & 0x1F_FFFF),
+            0x1F80_0000..=0x1F80_03FF |
+            0x9F80_0000..=0x9F80_03FF => self.scratchpad.read_byte(addr & 0x3FF),
+            0x1F80_1000..=0x1F80_1FFF |
+            0x9F80_1000..=0x9F80_1FFF |
+            0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.read_byte(addr)).unwrap_or_default(),
+            0x1FC0_0000..=0x1FC7_FFFF |
+            0x9FC0_0000..=0x9FC7_FFFF |
+            0xBFC0_0000..=0xBFC7_FFFF => self.bios.read_byte(addr & 0x7_FFFF),
+            0xFFFE_0130..=0xFFFE_0133 => self.cache_control.to_le_bytes()[(addr % 4) as usize],
             _ => panic!("read invalid address {:X}", addr),
         }
     }
 
     fn write_byte(&mut self, addr: Self::Addr, data: u8) {
-        let addr = addr & 0x1FFF_FFFF;
-        match addr { // TODO: KSEG
-            0x0000_0000..=0x007F_FFFF => self.main_ram.write_byte(addr & 0x1F_FFFF, data),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.write_byte(addr & 0x3FF, data),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.write_byte(addr, data)).unwrap_or_default(),
-            0x1FC0_0000..=0x1FC7_FFFF => {}, // BIOS
+        match addr {
+            0x0000_0000..=0x007F_FFFF |
+            0x8000_0000..=0x807F_FFFF |
+            0xA000_0000..=0xA07F_FFFF => self.main_ram.write_byte(addr & 0x1F_FFFF, data),
+            0x1F80_0000..=0x1F80_03FF |
+            0x9F80_0000..=0x9F80_03FF => self.scratchpad.write_byte(addr & 0x3FF, data),
+            0x1F80_1000..=0x1F80_1FFF |
+            0x9F80_1000..=0x9F80_1FFF |
+            0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.write_byte(addr, data)).unwrap_or_default(),
+            0x1FC0_0000..=0x1FC7_FFFF |
+            0x9FC0_0000..=0x9FC7_FFFF |
+            0xBFC0_0000..=0xBFC7_FFFF => {}, // BIOS
+            0xFFFE_0130..=0xFFFE_0133 => {}, // TODO: cache control
             _ => panic!("write invalid address {:X}", addr),
         }
     }
 
     fn read_halfword(&mut self, addr: Self::Addr) -> u16 {
-        let addr = addr & 0x1FFF_FFFF;
-        match addr { // TODO: KSEG
-            0x0000_0000..=0x007F_FFFF => self.main_ram.read_halfword(addr & 0x1F_FFFF),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.read_halfword(addr & 0x3FF),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.read_halfword(addr)).unwrap_or_default(),
-            0x1FC0_0000..=0x1FC7_FFFF => self.bios.read_halfword(addr & 0x7_FFFF),
+        match addr {
+            0x0000_0000..=0x007F_FFFF |
+            0x8000_0000..=0x807F_FFFF |
+            0xA000_0000..=0xA07F_FFFF => self.main_ram.read_halfword(addr & 0x1F_FFFF),
+            0x1F80_0000..=0x1F80_03FF |
+            0x9F80_0000..=0x9F80_03FF => self.scratchpad.read_halfword(addr & 0x3FF),
+            0x1F80_1000..=0x1F80_1FFF |
+            0x9F80_1000..=0x9F80_1FFF |
+            0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.read_halfword(addr)).unwrap_or_default(),
+            0x1FC0_0000..=0x1FC7_FFFF |
+            0x9FC0_0000..=0x9FC7_FFFF |
+            0xBFC0_0000..=0xBFC7_FFFF => self.bios.read_halfword(addr & 0x7_FFFF),
+            0xFFFE_0130..=0xFFFE_0133 => 0, // TODO: cache control
             _ => panic!("read invalid address {:X}", addr),
         }
     }
 
     fn write_halfword(&mut self, addr: Self::Addr, data: u16) {
-        let addr = addr & 0x1FFF_FFFF;
-        match addr { // TODO: KSEG
-            0x0000_0000..=0x007F_FFFF => self.main_ram.write_halfword(addr & 0x1F_FFFF, data),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.write_halfword(addr & 0x3FF, data),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.write_halfword(addr, data)).unwrap_or_default(),
-            0x1FC0_0000..=0x1FC7_FFFF => {}, // BIOS
+        match addr {
+            0x0000_0000..=0x007F_FFFF |
+            0x8000_0000..=0x807F_FFFF |
+            0xA000_0000..=0xA07F_FFFF => self.main_ram.write_halfword(addr & 0x1F_FFFF, data),
+            0x1F80_0000..=0x1F80_03FF |
+            0x9F80_0000..=0x9F80_03FF => self.scratchpad.write_halfword(addr & 0x3FF, data),
+            0x1F80_1000..=0x1F80_1FFF |
+            0x9F80_1000..=0x9F80_1FFF |
+            0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.write_halfword(addr, data)).unwrap_or_default(),
+            0x1FC0_0000..=0x1FC7_FFFF |
+            0x9FC0_0000..=0x9FC7_FFFF |
+            0xBFC0_0000..=0xBFC7_FFFF => {}, // BIOS
+            0xFFFE_0130..=0xFFFE_0133 => {}, // TODO: cache control
             _ => panic!("write invalid address {:X}", addr),
         }
     }
 
     fn read_word(&mut self, addr: Self::Addr) -> u32 {
-        let addr = addr & 0x1FFF_FFFF;
-        match addr { // TODO: KSEG
-            0x0000_0000..=0x007F_FFFF => self.main_ram.read_word(addr & 0x1F_FFFF),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.read_word(addr & 0x3FF),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.read_word(addr)).unwrap_or_default(),
-            0x1FC0_0000..=0x1FC7_FFFF => self.bios.read_word(addr & 0x7_FFFF),
+        match addr {
+            0x0000_0000..=0x007F_FFFF |
+            0x8000_0000..=0x807F_FFFF |
+            0xA000_0000..=0xA07F_FFFF => self.main_ram.read_word(addr & 0x1F_FFFF),
+            0x1F80_0000..=0x1F80_03FF |
+            0x9F80_0000..=0x9F80_03FF => self.scratchpad.read_word(addr & 0x3FF),
+            0x1F80_1000..=0x1F80_1FFF |
+            0x9F80_1000..=0x9F80_1FFF |
+            0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.read_word(addr)).unwrap_or_default(),
+            0x1FC0_0000..=0x1FC7_FFFF |
+            0x9FC0_0000..=0x9FC7_FFFF |
+            0xBFC0_0000..=0xBFC7_FFFF => self.bios.read_word(addr & 0x7_FFFF),
+            0xFFFE_0130 => self.cache_control,
             _ => panic!("read invalid address {:X}", addr),
         }
     }
 
     fn write_word(&mut self, addr: Self::Addr, data: u32) {
-        let addr = addr & 0x1FFF_FFFF;
-        match addr { // TODO: KSEG
-            0x0000_0000..=0x007F_FFFF => self.main_ram.write_word(addr & 0x1F_FFFF, data),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.write_word(addr & 0x3FF, data),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.write_word(addr, data)).unwrap_or_default(),
-            0x1FC0_0000..=0x1FC7_FFFF => {}, // BIOS
+        match addr {
+            0x0000_0000..=0x007F_FFFF |
+            0x8000_0000..=0x807F_FFFF |
+            0xA000_0000..=0xA07F_FFFF => self.main_ram.write_word(addr & 0x1F_FFFF, data),
+            0x1F80_0000..=0x1F80_03FF |
+            0x9F80_0000..=0x9F80_03FF => self.scratchpad.write_word(addr & 0x3FF, data),
+            0x1F80_1000..=0x1F80_1FFF |
+            0x9F80_1000..=0x9F80_1FFF |
+            0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.write_word(addr, data)).unwrap_or_default(),
+            0x1FC0_0000..=0x1FC7_FFFF |
+            0x9FC0_0000..=0x9FC7_FFFF |
+            0xBFC0_0000..=0xBFC7_FFFF => {}, // BIOS
+            0xFFFE_0130 => self.cache_control = data,
             _ => panic!("write invalid address {:X}", addr),
         }
     }
