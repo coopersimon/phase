@@ -76,7 +76,7 @@ impl SystemCoproc {
 const PRID: u32 = 0x0000_0001;
 
 impl Coprocessor0 for SystemCoproc {
-    fn move_from_reg(&mut self, reg: usize) -> u32 {
+    fn move_from_reg(&mut self, reg: u8) -> u32 {
         match reg {
             // TODO: others.
             8 => self.bad_virtual_addr,
@@ -88,7 +88,7 @@ impl Coprocessor0 for SystemCoproc {
         }
     }
 
-    fn move_to_reg(&mut self, reg: usize, data: u32) {
+    fn move_to_reg(&mut self, reg: u8, data: u32) {
         match reg {
             // TODO: others.
             12 => self.set_cause(data),
@@ -106,6 +106,11 @@ impl Coprocessor0 for SystemCoproc {
             0x10 => self.rfe(),
             _ => {}, // Undefined
         }
+    }
+
+    fn reset(&mut self) -> u32 {
+        // TODO: reset
+        0xBFC0_0000
     }
 
     fn trigger_exception(&mut self, exception: &mips::coproc::Exception) -> u32 {

@@ -1,6 +1,6 @@
 mod cop0;
 
-use mips::{coproc::EmptyCoproc, cpu::{MIPSCore, MIPSICore, mips1::MIPSI}, mem::Mem32};
+use mips::{coproc::EmptyCoproc, cpu::{MIPSCore, MIPSICore, mips1::{MIPSI, MIPSIInstruction}}, mem::Mem32};
 use crate::mem::MemBus;
 use crate::gte::GTE;
 use cop0::SystemCoproc;
@@ -15,10 +15,11 @@ pub struct CPU {
 
 impl CPU {
     pub fn new(mem_bus: Box<MemBus>) -> Self {
-        let core = MIPSCPU::with_memory(mem_bus)
+        let mut core = MIPSCPU::with_memory(mem_bus)
             .add_coproc0(SystemCoproc::new())
             .add_coproc2(GTE::new())
             .build();
+        core.reset();
         Self {
             core
         }
@@ -58,16 +59,19 @@ impl PSDebugger {
         self.core.step();
     }
 
-    pub fn get_state(&self) -> CPUState {
+    pub fn get_state(&mut self) -> CPUState {
         let mut regs = [0; 32];
-        for reg in 0..32 {
-            regs[reg] = self.core.read_gp(reg);
+        for reg in 0..32_u8 {
+            regs[reg as usize] = self.core.read_gp(reg);
         }
+        let pc = self.core.read_pc();
+        let instr = MIPSIInstruction::decode(self.core.mut_mem().read_word(pc));
         CPUState {
             regs,
             hi: self.core.read_hi(),
             lo: self.core.read_lo(),
-            pc: self.core.read_pc(),
+            pc: pc,
+            instr: instr,
         }
     }
 
@@ -89,5 +93,6 @@ pub struct CPUState {
     pub hi: u32,
     pub lo: u32,
     pub pc: u32,
+    pub instr: Option<MIPSIInstruction>,
     // TODO: cop0 stuff?
 }

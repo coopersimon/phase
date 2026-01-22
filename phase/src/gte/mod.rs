@@ -19,43 +19,43 @@ impl GTE {
 }
 
 impl Coprocessor for GTE {
-    fn load_from_mem(&mut self, reg: usize, data: u32) {
+    fn load_from_mem(&mut self, reg: u8, data: u32) {
         self.move_to_reg(reg, data);
     }
 
-    fn store_to_mem(&mut self, reg: usize) -> u32 {
+    fn store_to_mem(&mut self, reg: u8) -> u32 {
         self.move_from_reg(reg)
     }
 
-    fn move_from_control(&mut self, reg: usize) -> u32 {
-        self.control_regs[reg]
+    fn move_from_control(&mut self, reg: u8) -> u32 {
+        self.control_regs[reg as usize]
     }
 
-    fn move_to_control(&mut self, reg: usize, data: u32) {
-        self.control_regs[reg] = data;
+    fn move_to_control(&mut self, reg: u8, data: u32) {
+        self.control_regs[reg as usize] = data;
     }
 
-    fn move_from_reg(&mut self, reg: usize) -> u32 {
+    fn move_from_reg(&mut self, reg: u8) -> u32 {
         use Reg::*;
-        if reg == LZCR.idx() {
+        if reg as usize == LZCR.idx() {
             self.count_leading_zeros()
-        } else if reg == SXYP.idx() {
+        } else if reg as usize == SXYP.idx() {
             self.regs[SXY2.idx()]
-        } else if reg == IRGB.idx() || reg == ORGB.idx() {
+        } else if reg as usize == IRGB.idx() || reg as usize == ORGB.idx() {
             self.color_convert_out()
         } else {
-            self.regs[reg]
+            self.regs[reg as usize]
         }
     }
 
-    fn move_to_reg(&mut self, reg: usize, data: u32) {
+    fn move_to_reg(&mut self, reg: u8, data: u32) {
         use Reg::*;
-        if reg == SXYP.idx() {
+        if reg as usize == SXYP.idx() {
             self.push_sxy_stack(data);
-        } else if reg == IRGB.idx() {
+        } else if reg as usize == IRGB.idx() {
             self.color_convert_in(data);
         } else {
-            self.regs[reg] = data;
+            self.regs[reg as usize] = data;
         }
     }
 

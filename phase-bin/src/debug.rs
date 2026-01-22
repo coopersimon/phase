@@ -172,11 +172,13 @@ fn help() {
 // Step the CPU, and add the PC to the stack trace if it calls.
 fn step_and_trace(debugger: &mut PSDebugger, _stack_trace: &mut Vec<u32>, print: bool) {
     let state = debugger.get_state();
-    // TODO: get in a more printable form.
-    let instr = debugger.read_word(state.pc);
     
     if print {
-        println!("${:08X} {:08X}", state.pc, instr);
+        if let Some(instr) = state.instr {
+            println!("${:08X} {}", state.pc, instr);
+        } else {
+            println!("${:08X} INVALID", state.pc);
+        }
     }
 
     debugger.step();

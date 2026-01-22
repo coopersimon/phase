@@ -91,7 +91,8 @@ impl Mem32 for MemBus {
     }
 
     fn read_byte(&mut self, addr: Self::Addr) -> u8 {
-        match addr {
+        let addr = addr & 0x1FFF_FFFF;
+        match addr { // TODO: KSEG
             0x0000_0000..=0x007F_FFFF => self.main_ram.read_byte(addr & 0x1F_FFFF),
             0x1F80_0000..=0x1F80_03FF => self.scratchpad.read_byte(addr & 0x3FF),
             0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.read_byte(addr)).unwrap_or_default(),
@@ -101,7 +102,8 @@ impl Mem32 for MemBus {
     }
 
     fn write_byte(&mut self, addr: Self::Addr, data: u8) {
-        match addr {
+        let addr = addr & 0x1FFF_FFFF;
+        match addr { // TODO: KSEG
             0x0000_0000..=0x007F_FFFF => self.main_ram.write_byte(addr & 0x1F_FFFF, data),
             0x1F80_0000..=0x1F80_03FF => self.scratchpad.write_byte(addr & 0x3FF, data),
             0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.write_byte(addr, data)).unwrap_or_default(),
@@ -111,7 +113,8 @@ impl Mem32 for MemBus {
     }
 
     fn read_halfword(&mut self, addr: Self::Addr) -> u16 {
-        match addr {
+        let addr = addr & 0x1FFF_FFFF;
+        match addr { // TODO: KSEG
             0x0000_0000..=0x007F_FFFF => self.main_ram.read_halfword(addr & 0x1F_FFFF),
             0x1F80_0000..=0x1F80_03FF => self.scratchpad.read_halfword(addr & 0x3FF),
             0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.read_halfword(addr)).unwrap_or_default(),
@@ -121,7 +124,8 @@ impl Mem32 for MemBus {
     }
 
     fn write_halfword(&mut self, addr: Self::Addr, data: u16) {
-        match addr {
+        let addr = addr & 0x1FFF_FFFF;
+        match addr { // TODO: KSEG
             0x0000_0000..=0x007F_FFFF => self.main_ram.write_halfword(addr & 0x1F_FFFF, data),
             0x1F80_0000..=0x1F80_03FF => self.scratchpad.write_halfword(addr & 0x3FF, data),
             0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.write_halfword(addr, data)).unwrap_or_default(),
@@ -131,7 +135,8 @@ impl Mem32 for MemBus {
     }
 
     fn read_word(&mut self, addr: Self::Addr) -> u32 {
-        match addr {
+        let addr = addr & 0x1FFF_FFFF;
+        match addr { // TODO: KSEG
             0x0000_0000..=0x007F_FFFF => self.main_ram.read_word(addr & 0x1F_FFFF),
             0x1F80_0000..=0x1F80_03FF => self.scratchpad.read_word(addr & 0x3FF),
             0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.read_word(addr)).unwrap_or_default(),
@@ -141,7 +146,8 @@ impl Mem32 for MemBus {
     }
 
     fn write_word(&mut self, addr: Self::Addr, data: u32) {
-        match addr {
+        let addr = addr & 0x1FFF_FFFF;
+        match addr { // TODO: KSEG
             0x0000_0000..=0x007F_FFFF => self.main_ram.write_word(addr & 0x1F_FFFF, data),
             0x1F80_0000..=0x1F80_03FF => self.scratchpad.write_word(addr & 0x3FF, data),
             0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.write_word(addr, data)).unwrap_or_default(),
