@@ -21,13 +21,13 @@ impl DMA {
     pub fn new() -> Self {
         Self {
             channels: [
-                DMAChannel::new(),
-                DMAChannel::new(),
-                DMAChannel::new(),
-                DMAChannel::new(),
-                DMAChannel::new(),
-                DMAChannel::new(),
-                DMAChannel::new()
+                DMAChannel::new(0x1F80_1820), // MDEC in
+                DMAChannel::new(0x1F80_1820), // MDEC out
+                DMAChannel::new(0x1F80_1810), // GPU
+                DMAChannel::new(0x1F80_1804), // CD
+                DMAChannel::new(0x1F80_1DA8), // SPU
+                DMAChannel::new(0), // PIO
+                DMAChannel::new(0)  // OTC
             ],
             control: DMAControl::empty(),
             interrupt: DMAInterrupt::empty(),
@@ -46,11 +46,67 @@ impl DMA {
         }
     }
 
+    pub fn mdec_req(&mut self) {
+        self.channels[0].start_sync_mode(1);
+        self.channels[1].start_sync_mode(1);
+    }
+
+    pub fn spu_req(&mut self) {
+        self.channels[4].start_sync_mode(1);
+    }
+
+    pub fn gpu_data_req(&mut self) {
+        self.channels[2].start_sync_mode(1);
+    }
+
+    pub fn gpu_command_req(&mut self) {
+        self.channels[2].start_sync_mode(2);
+    }
+
     /// Get the DMA address for the channel provided.
     /// 
     /// If None, then no transfers are necessary.
     pub fn get_transfer(&mut self) -> Option<DMATransfer> {
-        None
+        // Get active DMA channel.
+        let mut current = None;
+        let mut current_prio = 8;
+        for n in 0..7 {
+            let channel = self.control.bits() >> (n * 4);
+            let active = channel & 0x8 == 0x8;
+            let prio = channel & 0x7;
+            if active && prio < current_prio && self.channels[n].control.contains(ChannelControl::StartBusy) {
+                current_prio = prio;
+                current = Some(n);
+            }
+        }
+        if let Some(chan) = current {
+            let channel = &mut self.channels[chan];
+            channel.control.remove(ChannelControl::StartTrigger);
+            let transfer = Some(if channel.control.contains(ChannelControl::TransferDir) {
+                // From RAM
+                DMATransfer {
+                    src_addr: channel.current_addr,
+                    dst_addr: channel.device_addr,
+                }
+            } else {
+                // To RAM
+                DMATransfer {
+                    src_addr: channel.device_addr,
+                    dst_addr: channel.current_addr,
+                }
+            });
+            if channel.control.contains(ChannelControl::DecAddr) {
+                channel.current_addr -= 4;
+            } else {
+                channel.current_addr += 4;
+            }
+            if channel.dec_word_count() {
+                channel.finish_block();
+            }
+            transfer
+        } else {
+            None
+        }
     }
 
     fn set_control(&mut self, data: u32) {
@@ -199,17 +255,32 @@ bitflags::bitflags! {
 /// A single channel for DMA.
 /// There are 7 in total.
 struct DMAChannel {
+    // Registers
     base_addr: u32,
     block_control: u32,
     control: ChannelControl,
+
+    // Fixed address
+    device_addr: u32,
+
+    // Transfer state
+    current_addr: u32,
+    current_word_count: u32,
+    current_block_count: u32,
 }
 
 impl DMAChannel {
-    fn new() -> Self {
+    fn new(device_addr: u32) -> Self {
         Self {
             base_addr: 0,
             block_control: 0,
             control: ChannelControl::empty(),
+
+            device_addr,
+
+            current_addr: 0,
+            current_word_count: 0,
+            current_block_count: 0,
         }
     }
 
@@ -219,6 +290,32 @@ impl DMAChannel {
 
     fn set_control(&mut self, data: u32) {
         self.control = ChannelControl::from_bits_truncate(data);
+        self.start_sync_mode(0);
+    }
+
+    fn start_sync_mode(&mut self, mode: u32) {
+        let current_mode = (self.control & ChannelControl::SyncMode).bits() >> 9;
+        if mode == current_mode {
+            self.control.insert(ChannelControl::StartBusy);
+            self.current_addr = self.base_addr;
+            self.current_word_count = self.block_control & 0xFFFF;
+            self.current_block_count = (self.block_control >> 16) & 0xFFFF;
+        }
+    }
+
+    /// Decrement the block by 1.
+    /// Returns true if the block is complete.
+    fn dec_word_count(&mut self) -> bool {
+        self.current_word_count = self.current_word_count.wrapping_sub(1);
+        self.current_word_count == 0
+    }
+
+    fn finish_block(&mut self) {
+        if self.current_block_count == 0 {
+            self.control.remove(ChannelControl::StartBusy);
+        } else {
+            self.current_block_count -= 1;
+        }
     }
 }
 

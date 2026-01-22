@@ -112,6 +112,12 @@ impl MemInterface for CDROM {
                 1 | 3 => self.int_flags.bits(),
                 _ => unreachable!()
             },
+            // The following is a bit of a hack to simplify DMA logic.
+            // Ideally we should have some sort of custom DMA reader?
+            0x1F80_1804 => self.read_data(),
+            0x1F80_1805 => self.read_data(),
+            0x1F80_1806 => self.read_data(),
+            0x1F80_1807 => self.read_data(),
             _ => panic!("invalid CDROM addr {:X}", addr)
         }
     }
@@ -500,21 +506,27 @@ impl CDROM {
 
     /// Read with retry
     fn read_n(&mut self) -> DriveResult<()> {
+        self.send_response(self.drive_status.bits(), 3);
         self.drive_status.remove(DriveStatus::ReadBits);
         self.drive_status.insert(DriveStatus::Reading);
+        self.send_response(self.drive_status.bits(), 1);
         Ok(())
     }
 
     /// Read without retry
     fn read_s(&mut self) -> DriveResult<()> {
+        self.send_response(self.drive_status.bits(), 3);
         self.drive_status.remove(DriveStatus::ReadBits);
         self.drive_status.insert(DriveStatus::Reading);
+        self.send_response(self.drive_status.bits(), 1);
         Ok(())
     }
 
     /// Read table of contents
     fn read_toc(&mut self) -> DriveResult<()> {
         // TODO: .cue file?
+        self.send_response(self.drive_status.bits(), 3);
+        self.send_response(self.drive_status.bits(), 2);
         Ok(())
     }
 
@@ -577,7 +589,7 @@ impl CDROM {
             self.send_response(0x53, 5); // S
             self.send_response(0x43, 5); // C
             self.send_response(0x45, 5); // E
-            self.send_response(0x40, 5); // [Region: A/E/I] TODO: set based on disc.
+            self.send_response(0x41, 5); // [Region: A/E/I] TODO: set based on disc.
         } else {
             self.send_response(0x08, 5); // Stat?
             self.send_response(0x40, 5); // Flags
