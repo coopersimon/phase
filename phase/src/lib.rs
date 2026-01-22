@@ -4,6 +4,7 @@ mod gte;
 mod interrupt;
 mod timer;
 mod cdrom;
+mod expansion;
 mod utils;
 
 use std::path::PathBuf;

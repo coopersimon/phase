@@ -14,6 +14,7 @@ use crate::utils::interface::MemInterface;
 use crate::interrupt::InterruptControl;
 use crate::timer::Timers;
 use crate::cdrom::CDROM;
+use crate::expansion::{ExpansionPort1, ExpansionPort2};
 
 pub struct MemBus {
     control: MemControl,
@@ -27,6 +28,8 @@ pub struct MemBus {
     cdrom: CDROM,
 
     cache_control: u32,
+    expansion_port_1: ExpansionPort1,
+    expansion_port_2: ExpansionPort2,
 }
 
 impl MemBus {
@@ -44,6 +47,8 @@ impl MemBus {
             cdrom: CDROM::new(),
 
             cache_control: 0,
+            expansion_port_1: ExpansionPort1::new(),
+            expansion_port_2: ExpansionPort2::new(),
         }
     }
 
@@ -99,11 +104,13 @@ impl Mem32 for MemBus {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
             0xA000_0000..=0xA07F_FFFF => self.main_ram.read_byte(addr & 0x1F_FFFF),
+            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.read_byte(addr),
             0x1F80_0000..=0x1F80_03FF |
             0x9F80_0000..=0x9F80_03FF => self.scratchpad.read_byte(addr & 0x3FF),
             0x1F80_1000..=0x1F80_1FFF |
             0x9F80_1000..=0x9F80_1FFF |
             0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.read_byte(addr)).unwrap_or_default(),
+            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.read_byte(addr),
             0x1FC0_0000..=0x1FC7_FFFF |
             0x9FC0_0000..=0x9FC7_FFFF |
             0xBFC0_0000..=0xBFC7_FFFF => self.bios.read_byte(addr & 0x7_FFFF),
@@ -117,11 +124,13 @@ impl Mem32 for MemBus {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
             0xA000_0000..=0xA07F_FFFF => self.main_ram.write_byte(addr & 0x1F_FFFF, data),
+            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.write_byte(addr, data),
             0x1F80_0000..=0x1F80_03FF |
             0x9F80_0000..=0x9F80_03FF => self.scratchpad.write_byte(addr & 0x3FF, data),
             0x1F80_1000..=0x1F80_1FFF |
             0x9F80_1000..=0x9F80_1FFF |
             0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.write_byte(addr, data)).unwrap_or_default(),
+            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.write_byte(addr, data),
             0x1FC0_0000..=0x1FC7_FFFF |
             0x9FC0_0000..=0x9FC7_FFFF |
             0xBFC0_0000..=0xBFC7_FFFF => {}, // BIOS
@@ -135,11 +144,13 @@ impl Mem32 for MemBus {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
             0xA000_0000..=0xA07F_FFFF => self.main_ram.read_halfword(addr & 0x1F_FFFF),
+            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.read_halfword(addr),
             0x1F80_0000..=0x1F80_03FF |
             0x9F80_0000..=0x9F80_03FF => self.scratchpad.read_halfword(addr & 0x3FF),
             0x1F80_1000..=0x1F80_1FFF |
             0x9F80_1000..=0x9F80_1FFF |
             0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.read_halfword(addr)).unwrap_or_default(),
+            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.read_halfword(addr),
             0x1FC0_0000..=0x1FC7_FFFF |
             0x9FC0_0000..=0x9FC7_FFFF |
             0xBFC0_0000..=0xBFC7_FFFF => self.bios.read_halfword(addr & 0x7_FFFF),
@@ -153,11 +164,13 @@ impl Mem32 for MemBus {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
             0xA000_0000..=0xA07F_FFFF => self.main_ram.write_halfword(addr & 0x1F_FFFF, data),
+            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.write_halfword(addr, data),
             0x1F80_0000..=0x1F80_03FF |
             0x9F80_0000..=0x9F80_03FF => self.scratchpad.write_halfword(addr & 0x3FF, data),
             0x1F80_1000..=0x1F80_1FFF |
             0x9F80_1000..=0x9F80_1FFF |
             0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.write_halfword(addr, data)).unwrap_or_default(),
+            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.write_halfword(addr, data),
             0x1FC0_0000..=0x1FC7_FFFF |
             0x9FC0_0000..=0x9FC7_FFFF |
             0xBFC0_0000..=0xBFC7_FFFF => {}, // BIOS
@@ -171,11 +184,13 @@ impl Mem32 for MemBus {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
             0xA000_0000..=0xA07F_FFFF => self.main_ram.read_word(addr & 0x1F_FFFF),
+            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.read_word(addr),
             0x1F80_0000..=0x1F80_03FF |
             0x9F80_0000..=0x9F80_03FF => self.scratchpad.read_word(addr & 0x3FF),
             0x1F80_1000..=0x1F80_1FFF |
             0x9F80_1000..=0x9F80_1FFF |
             0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.read_word(addr)).unwrap_or_default(),
+            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.read_word(addr),
             0x1FC0_0000..=0x1FC7_FFFF |
             0x9FC0_0000..=0x9FC7_FFFF |
             0xBFC0_0000..=0xBFC7_FFFF => self.bios.read_word(addr & 0x7_FFFF),
@@ -189,11 +204,13 @@ impl Mem32 for MemBus {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
             0xA000_0000..=0xA07F_FFFF => self.main_ram.write_word(addr & 0x1F_FFFF, data),
+            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.write_word(addr, data),
             0x1F80_0000..=0x1F80_03FF |
             0x9F80_0000..=0x9F80_03FF => self.scratchpad.write_word(addr & 0x3FF, data),
             0x1F80_1000..=0x1F80_1FFF |
             0x9F80_1000..=0x9F80_1FFF |
             0xBF80_1000..=0xBF80_1FFF => self.mut_io_device(addr).map(|d| d.write_word(addr, data)).unwrap_or_default(),
+            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.write_word(addr, data),
             0x1FC0_0000..=0x1FC7_FFFF |
             0x9FC0_0000..=0x9FC7_FFFF |
             0xBFC0_0000..=0xBFC7_FFFF => {}, // BIOS
