@@ -2,8 +2,9 @@ mod ram;
 mod bios;
 mod control;
 mod dma;
+mod cache;
 
-use mips::mem::Mem32;
+use mips::mem::{Data, Mem32};
 use ram::RAM;
 use bios::BIOS;
 use control::MemControl;
@@ -76,8 +77,8 @@ impl MemBus {
     /// DMA transfers are complete.
     fn do_dma(&mut self) {
         while let Some(transfer) = self.dma.get_transfer() {
-            let data = self.read_word(transfer.src_addr);
-            self.write_word(transfer.dst_addr, data);
+            let Data { data, cycles: _load_cycles } = self.read_word(transfer.src_addr);
+            let _store_cycles = self.write_word(transfer.dst_addr, data);
             // TODO: do_clock?
         }
     }
@@ -99,8 +100,8 @@ impl Mem32 for MemBus {
         }
     }
 
-    fn read_byte(&mut self, addr: Self::Addr) -> u8 {
-        match addr {
+    fn read_byte(&mut self, addr: Self::Addr) -> Data<u8> {
+        let data = match addr {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
             0xA000_0000..=0xA07F_FFFF => self.main_ram.read_byte(addr & 0x1F_FFFF),
@@ -116,10 +117,11 @@ impl Mem32 for MemBus {
             0xBFC0_0000..=0xBFC7_FFFF => self.bios.read_byte(addr & 0x7_FFFF),
             0xFFFE_0130..=0xFFFE_0133 => self.cache_control.to_le_bytes()[(addr % 4) as usize],
             _ => panic!("read invalid address {:X}", addr),
-        }
+        };
+        Data { data, cycles: 1 }
     }
 
-    fn write_byte(&mut self, addr: Self::Addr, data: u8) {
+    fn write_byte(&mut self, addr: Self::Addr, data: u8) -> usize {
         match addr {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
@@ -137,10 +139,11 @@ impl Mem32 for MemBus {
             0xFFFE_0130..=0xFFFE_0133 => {}, // TODO: cache control
             _ => panic!("write invalid address {:X}", addr),
         }
+        1
     }
 
-    fn read_halfword(&mut self, addr: Self::Addr) -> u16 {
-        match addr {
+    fn read_halfword(&mut self, addr: Self::Addr) -> Data<u16> {
+        let data = match addr {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
             0xA000_0000..=0xA07F_FFFF => self.main_ram.read_halfword(addr & 0x1F_FFFF),
@@ -156,10 +159,11 @@ impl Mem32 for MemBus {
             0xBFC0_0000..=0xBFC7_FFFF => self.bios.read_halfword(addr & 0x7_FFFF),
             0xFFFE_0130..=0xFFFE_0133 => 0, // TODO: cache control
             _ => panic!("read invalid address {:X}", addr),
-        }
+        };
+        Data { data, cycles: 1 }
     }
 
-    fn write_halfword(&mut self, addr: Self::Addr, data: u16) {
+    fn write_halfword(&mut self, addr: Self::Addr, data: u16) -> usize {
         match addr {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
@@ -177,10 +181,11 @@ impl Mem32 for MemBus {
             0xFFFE_0130..=0xFFFE_0133 => {}, // TODO: cache control
             _ => panic!("write invalid address {:X}", addr),
         }
+        1
     }
 
-    fn read_word(&mut self, addr: Self::Addr) -> u32 {
-        match addr {
+    fn read_word(&mut self, addr: Self::Addr) -> Data<u32> {
+        let data = match addr {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
             0xA000_0000..=0xA07F_FFFF => self.main_ram.read_word(addr & 0x1F_FFFF),
@@ -196,10 +201,11 @@ impl Mem32 for MemBus {
             0xBFC0_0000..=0xBFC7_FFFF => self.bios.read_word(addr & 0x7_FFFF),
             0xFFFE_0130 => self.cache_control,
             _ => panic!("read invalid address {:X}", addr),
-        }
+        };
+        Data { data, cycles: 1 }
     }
 
-    fn write_word(&mut self, addr: Self::Addr, data: u32) {
+    fn write_word(&mut self, addr: Self::Addr, data: u32) -> usize {
         match addr {
             0x0000_0000..=0x007F_FFFF |
             0x8000_0000..=0x807F_FFFF |
@@ -217,6 +223,7 @@ impl Mem32 for MemBus {
             0xFFFE_0130 => self.cache_control = data,
             _ => panic!("write invalid address {:X}", addr),
         }
+        1
     }
 }
 

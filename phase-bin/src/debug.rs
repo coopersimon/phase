@@ -100,7 +100,7 @@ fn print(s: &str, debugger: &mut PSDebugger) {
                 Ok(start) => match u32::from_str_radix(&s[(x+1)..], 16) {
                     Ok(end) => {
                         println!("${:08X} - ${:08X}:", start, end);
-                        let mems = (start..end).map(|n| format!("{:02X}", debugger.read_byte(n)))
+                        let mems = (start..end).map(|n| format!("{:02X}", debugger.read_byte(n).data))
                             .collect::<Vec<_>>()
                             .join(" ");
                         println!("{}", mems);
@@ -111,7 +111,7 @@ fn print(s: &str, debugger: &mut PSDebugger) {
             }
         } else {    // Single location
             match u32::from_str_radix(bytes, 16) {
-                Ok(num) => println!("${:08X}: ${:02X}", num, debugger.read_byte(num)),
+                Ok(num) => println!("${:08X}: ${:02X}", num, debugger.read_byte(num).data),
                 Err(e) => println!("Invalid p tag: {}", e),
             }
         }
@@ -122,7 +122,7 @@ fn print(s: &str, debugger: &mut PSDebugger) {
                 Ok(start) => match u32::from_str_radix(&s[(x+1)..], 16) {
                     Ok(end) => {
                         println!("${:08X} - ${:08X}:", start, end);
-                        let mems = (start..end).map(|n| format!("{:08X}", debugger.read_word(n)))
+                        let mems = (start..end).map(|n| format!("{:08X}", debugger.read_word(n).data))
                             .collect::<Vec<_>>()
                             .join(" ");
                         println!("{}", mems);
@@ -133,7 +133,7 @@ fn print(s: &str, debugger: &mut PSDebugger) {
             }
         } else {    // Single location
             match u32::from_str_radix(words, 16) {
-                Ok(num) => println!("${:08X}: ${:08X}", num, debugger.read_word(num)),
+                Ok(num) => println!("${:08X}: ${:08X}", num, debugger.read_word(num).data),
                 Err(e) => println!("Invalid p tag: {}", e),
             }
         }

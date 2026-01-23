@@ -1,6 +1,6 @@
 mod cop0;
 
-use mips::{coproc::EmptyCoproc, cpu::{MIPSCore, MIPSICore, mips1::{MIPSI, MIPSIInstruction}}, mem::Mem32};
+use mips::{coproc::EmptyCoproc, cpu::{MIPSCore, MIPSICore, mips1::{MIPSI, MIPSIInstruction}}, mem::{Data, Mem32}};
 use crate::mem::MemBus;
 use crate::gte::GTE;
 use cop0::SystemCoproc;
@@ -65,7 +65,8 @@ impl PSDebugger {
             regs[reg as usize] = self.core.read_gp(reg);
         }
         let pc = self.core.read_pc();
-        let instr = MIPSIInstruction::decode(self.core.mut_mem().read_word(pc));
+        let Data{data: instr_bits, ..} = self.core.mut_mem().read_word(pc);
+        let instr = MIPSIInstruction::decode(instr_bits);
         CPUState {
             regs,
             hi: self.core.read_hi(),
@@ -75,15 +76,15 @@ impl PSDebugger {
         }
     }
 
-    pub fn read_byte(&mut self, addr: u32) -> u8 {
+    pub fn read_byte(&mut self, addr: u32) -> Data<u8> {
         self.core.mut_mem().read_byte(addr)
     }
 
-    pub fn read_halfword(&mut self, addr: u32) -> u16 {
+    pub fn read_halfword(&mut self, addr: u32) -> Data<u16> {
         self.core.mut_mem().read_halfword(addr)
     }
 
-    pub fn read_word(&mut self, addr: u32) -> u32 {
+    pub fn read_word(&mut self, addr: u32) -> Data<u32> {
         self.core.mut_mem().read_word(addr)
     }
 }

@@ -103,6 +103,7 @@ impl CDROM {
 
 impl MemInterface for CDROM {
     fn read_byte(&mut self, addr: u32) -> u8 {
+        println!("read cd {:X}", addr);
         match addr {
             0x1F80_1800 => self.status.bits(),
             0x1F80_1801 => self.read_response(),
@@ -123,6 +124,7 @@ impl MemInterface for CDROM {
     }
 
     fn write_byte(&mut self, addr: u32, data: u8) {
+        println!("write cd {:X}: {:X}", addr, data);
         match addr {
             0x1F80_1800 => self.write_status(data),
             0x1F80_1801 => match self.index() {
