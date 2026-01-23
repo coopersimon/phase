@@ -8,7 +8,6 @@ mod expansion;
 mod utils;
 
 use std::path::PathBuf;
-use mem::MemBus;
 
 pub use crate::cpu::PSDebugger as PSDebugger;
 
@@ -24,8 +23,7 @@ pub struct PlayStation {
 
 impl PlayStation {
     pub fn new(config: &PlayStationConfig) -> Self {
-        let mem_bus = Box::new(MemBus::new(config));
-        let cpu = cpu::CPU::new(mem_bus);
+        let cpu = cpu::CPU::new(config);
         Self {
             cpu
         }

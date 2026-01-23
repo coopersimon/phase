@@ -1,11 +1,12 @@
 mod cop0;
+mod internalmem;
 
 use mips::{coproc::EmptyCoproc, cpu::{MIPSCore, MIPSICore, mips1::{MIPSI, MIPSIInstruction}}, mem::{Data, Mem32}};
-use crate::mem::MemBus;
+use internalmem::InternalMem;
 use crate::gte::GTE;
-use cop0::SystemCoproc;
+use crate::PlayStationConfig;
 
-type MIPSCPU = MIPSI<MemBus, SystemCoproc, EmptyCoproc, GTE, EmptyCoproc>;
+type MIPSCPU = MIPSI<InternalMem, EmptyCoproc, GTE, EmptyCoproc>;
 
 /// PlayStation CPU object.
 /// This drives the CPU and manages memory.
@@ -14,9 +15,9 @@ pub struct CPU {
 }
 
 impl CPU {
-    pub fn new(mem_bus: Box<MemBus>) -> Self {
-        let mut core = MIPSCPU::with_memory(mem_bus)
-            .add_coproc0(SystemCoproc::new())
+    pub fn new(config: &PlayStationConfig) -> Self {
+        let mem = Box::new(InternalMem::new(config));
+        let mut core = MIPSCPU::with_memory(mem)
             .add_coproc2(GTE::new())
             .build();
         core.reset();

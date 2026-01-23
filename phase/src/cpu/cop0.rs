@@ -73,15 +73,8 @@ impl SystemCoproc {
         }
     }
 
-    /// Check if an interrupt has triggered.
-    fn check_interrupt(&self) -> bool {
-        if self.system_status.contains(SystemStatus::CurrentIntEnable) {
-            let mask = (self.system_status & SystemStatus::InterruptMask).bits();
-            let irq = (self.exception_cause & ExceptionCause::InterruptPending).bits();
-            mask & irq != 0
-        } else {
-            false
-        }
+    pub fn isolate_cache(&self) -> bool {
+        self.system_status.contains(SystemStatus::IsolateCache)
     }
 }
 
@@ -198,5 +191,16 @@ impl SystemCoproc {
         let stack = self.system_status & SystemStatus::IntStackBottom;
         self.system_status.remove(SystemStatus::IntStackTop);
         self.system_status.insert(SystemStatus::from_bits_truncate(stack.bits() >> 2));
+    }
+
+    /// Check if an interrupt has triggered.
+    fn check_interrupt(&self) -> bool {
+        if self.system_status.contains(SystemStatus::CurrentIntEnable) {
+            let mask = (self.system_status & SystemStatus::InterruptMask).bits();
+            let irq = (self.exception_cause & ExceptionCause::InterruptPending).bits();
+            mask & irq != 0
+        } else {
+            false
+        }
     }
 }
