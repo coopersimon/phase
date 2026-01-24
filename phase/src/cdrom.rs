@@ -8,7 +8,9 @@ use std::{
     path::Path
 };
 
-use crate::interrupt::Interrupt;
+use mips::mem::Data;
+
+use crate::{interrupt::Interrupt, mem::DMADevice};
 use crate::utils::{
     bits::*,
     bcd::to_bcd,
@@ -113,12 +115,6 @@ impl MemInterface for CDROM {
                 1 | 3 => self.int_flags.bits(),
                 _ => unreachable!()
             },
-            // The following is a bit of a hack to simplify DMA logic.
-            // Ideally we should have some sort of custom DMA reader?
-            0x1F80_1804 => self.read_data(),
-            0x1F80_1805 => self.read_data(),
-            0x1F80_1806 => self.read_data(),
-            0x1F80_1807 => self.read_data(),
             _ => panic!("invalid CDROM addr {:X}", addr)
         }
     }
@@ -180,6 +176,22 @@ impl MemInterface for CDROM {
         self.write_byte(addr + 1, data[1]);
         self.write_byte(addr + 2, data[2]);
         self.write_byte(addr + 3, data[3]);
+    }
+}
+
+impl DMADevice for CDROM {
+    fn dma_read_word(&mut self) -> Data<u32> {
+        let data = u32::from_le_bytes([
+            self.read_data(),
+            self.read_data(),
+            self.read_data(),
+            self.read_data()
+        ]);
+        Data { data, cycles: 1 }
+    }
+
+    fn dma_write_word(&mut self, _data: u32) -> usize {
+        panic!("not valid to use DMA to write to CDROM!")
     }
 }
 

@@ -8,8 +8,10 @@ use ram::RAM;
 use bios::BIOS;
 use control::MemControl;
 use dma::DMA;
+pub use dma::DMADevice;
 
 use crate::PlayStationConfig;
+use crate::gpu::GPU;
 use crate::spu::SPU;
 use crate::utils::interface::MemInterface;
 use crate::interrupt::InterruptControl;
@@ -28,6 +30,7 @@ pub struct MemBus {
     dma:    DMA,
     cdrom:  CDROM,
     spu:    SPU,
+    gpu:    GPU,
 
     expansion_port_1: ExpansionPort1,
     expansion_port_2: ExpansionPort2,
@@ -47,6 +50,7 @@ impl MemBus {
             dma:    DMA::new(),
             cdrom:  CDROM::new(),
             spu:    SPU::new(),
+            gpu:    GPU::new(),
 
             expansion_port_1: ExpansionPort1::new(),
             expansion_port_2: ExpansionPort2::new(),
@@ -55,18 +59,18 @@ impl MemBus {
 
     /// Clock internally, and set interrupt bits.
     fn do_clock(&mut self, cycles: usize) {
-        let hblank = false;
-        let vblank = false;
+        let gpu_stat = self.gpu.clock(cycles);
 
         let dma_irq = self.dma.check_irq();
 
-        let timer_irq = self.timers.clock(cycles, hblank, vblank);
+        let timer_irq = self.timers.clock(cycles, gpu_stat.h_blank, gpu_stat.v_blank);
 
         let cd_irq = self.cdrom.clock(cycles);
 
         let spu_irq = self.spu.clock(cycles);
 
         self.interrupts.trigger_irq(
+            gpu_stat.irq |
             dma_irq |
             timer_irq |
             cd_irq |
@@ -80,9 +84,19 @@ impl MemBus {
     /// DMA transfers are complete.
     fn do_dma(&mut self) {
         while let Some(transfer) = self.dma.get_transfer() {
-            let Data { data, cycles: _load_cycles } = self.read_word(transfer.src_addr);
-            let _store_cycles = self.write_word(transfer.dst_addr, data);
-            // TODO: do_clock?
+            let ram_addr = transfer.addr & 0x1F_FFFF;
+            let cycles = if transfer.from_ram {
+                let data = self.main_ram.read_word(ram_addr);
+                let load_cycles = 1; // TODO...
+                let store_cycles = self.mut_dma_device(transfer.device).dma_write_word(data);
+                store_cycles + load_cycles
+            } else {
+                let Data { data, cycles: load_cycles } = self.mut_dma_device(transfer.device).dma_read_word();
+                self.main_ram.write_word(ram_addr, data);
+                let store_cycles = 1; // TODO...
+                store_cycles + load_cycles
+            };
+            self.do_clock(cycles);
         }
     }
 }
@@ -185,7 +199,7 @@ impl Mem32 for MemBus {
 impl MemBus {
     /// Mutably reference an I/O device.
     fn mut_io_device<'a>(&'a mut self, addr: u32) -> Option<&'a mut dyn MemInterface> {
-        println!("access I/O {:X}", addr);
+        //println!("access I/O {:X}", addr);
         match addr {
             0x1F80_1000..=0x1F80_1023 => Some(&mut self.control),
             0x1F80_1040..=0x1F80_105F => None, // Peripheral
@@ -194,10 +208,24 @@ impl MemBus {
             0x1F80_1080..=0x1F80_10FF => Some(&mut self.dma),
             0x1F80_1100..=0x1F80_1129 => Some(&mut self.timers),
             0x1F80_1800..=0x1F80_1807 => Some(&mut self.cdrom),
-            0x1F80_1810..=0x1F80_1817 => None, // GPU
+            0x1F80_1810..=0x1F80_1817 => Some(&mut self.gpu),
             0x1F80_1820..=0x1F80_1827 => None, // MDEC
             0x1F80_1C00..=0x1F80_1FFF => Some(&mut self.spu),
             _ => panic!("no such I/O device at {:X}", addr),
+        }
+    }
+
+    /// Mutably reference a DMA device.
+    fn mut_dma_device<'a>(&'a mut self, device: usize) -> &'a mut dyn DMADevice {
+        match device {
+            0 => unimplemented!("mdec DMA"),
+            1 => unimplemented!("mdec DMA"),
+            2 => &mut self.gpu,
+            3 => &mut self.cdrom,
+            4 => &mut self.spu,
+            5 => unimplemented!("expansion port DMA"),
+            6 => unimplemented!("OTC DMA"), // GPU ordering table...
+            _ => unreachable!()
         }
     }
 }

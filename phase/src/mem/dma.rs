@@ -1,5 +1,18 @@
+use mips::mem::Data;
+
 use crate::{interrupt::Interrupt, utils::{bits::*, interface::MemInterface}};
 
+/// Device that is capable of sending and/or receiving
+/// data via DMA.
+pub trait DMADevice {
+    /// Read a word from the DMA port.
+    fn dma_read_word(&mut self) -> Data<u32>;
+
+    /// Write a word to the DMA port.
+    /// 
+    /// Returns a cycle count.
+    fn dma_write_word(&mut self, data: u32) -> usize;
+}
 
 /// Direct memory access.
 pub struct DMA {
@@ -11,24 +24,17 @@ pub struct DMA {
 
 /// Represents a single word transfer via DMA.
 /// 
-/// The external memory bus just needs to transfer from src to dst.
+/// The external memory bus just needs to transfer between RAM and the device.
 pub struct DMATransfer {
-    pub src_addr: u32,
-    pub dst_addr: u32,
+    pub addr:       u32,
+    pub from_ram:   bool,
+    pub device:     usize,
 }
 
 impl DMA {
     pub fn new() -> Self {
         Self {
-            channels: [
-                DMAChannel::new(0x1F80_1820), // MDEC in
-                DMAChannel::new(0x1F80_1820), // MDEC out
-                DMAChannel::new(0x1F80_1810), // GPU
-                DMAChannel::new(0x1F80_1804), // CD
-                DMAChannel::new(0x1F80_1DA8), // SPU
-                DMAChannel::new(0), // PIO
-                DMAChannel::new(0)  // OTC
-            ],
+            channels: core::array::from_fn(|_| DMAChannel::new()),
             control: DMAControl::empty(),
             interrupt: DMAInterrupt::empty(),
             irq_pending: false,
@@ -70,7 +76,7 @@ impl DMA {
         // Get active DMA channel.
         let mut current = None;
         let mut current_prio = 8;
-        for n in 0..7 {
+        for n in (0..7).rev() {
             let channel = self.control.bits() >> (n * 4);
             let active = channel & 0x8 == 0x8;
             let prio = channel & 0x7;
@@ -82,18 +88,10 @@ impl DMA {
         if let Some(chan) = current {
             let channel = &mut self.channels[chan];
             channel.control.remove(ChannelControl::StartTrigger);
-            let transfer = Some(if channel.control.contains(ChannelControl::TransferDir) {
-                // From RAM
-                DMATransfer {
-                    src_addr: channel.current_addr,
-                    dst_addr: channel.device_addr,
-                }
-            } else {
-                // To RAM
-                DMATransfer {
-                    src_addr: channel.device_addr,
-                    dst_addr: channel.current_addr,
-                }
+            let transfer = Some(DMATransfer {
+                addr:       channel.current_addr,
+                from_ram:   channel.control.contains(ChannelControl::TransferDir),
+                device:     chan
             });
             if channel.control.contains(ChannelControl::DecAddr) {
                 channel.current_addr -= 4;
@@ -132,6 +130,7 @@ impl DMA {
 
 impl MemInterface for DMA {
     fn read_word(&mut self, addr: u32) -> u32 {
+        //println!("DMA read {:X}", addr);
         match addr {
             0x1F801080 => self.channels[0].base_addr,
             0x1F801084 => self.channels[0].block_control,
@@ -169,6 +168,7 @@ impl MemInterface for DMA {
     }
 
     fn write_word(&mut self, addr: u32, data: u32) {
+        //println!("DMA write {:X} => {:X}", data, addr);
         match addr {
             0x1F801080 => self.channels[0].set_addr(data),
             0x1F801084 => self.channels[0].block_control = data,
@@ -260,9 +260,6 @@ struct DMAChannel {
     block_control: u32,
     control: ChannelControl,
 
-    // Fixed address
-    device_addr: u32,
-
     // Transfer state
     current_addr: u32,
     current_word_count: u32,
@@ -270,13 +267,11 @@ struct DMAChannel {
 }
 
 impl DMAChannel {
-    fn new(device_addr: u32) -> Self {
+    fn new() -> Self {
         Self {
             base_addr: 0,
             block_control: 0,
             control: ChannelControl::empty(),
-
-            device_addr,
 
             current_addr: 0,
             current_word_count: 0,
@@ -290,7 +285,9 @@ impl DMAChannel {
 
     fn set_control(&mut self, data: u32) {
         self.control = ChannelControl::from_bits_truncate(data);
-        self.start_sync_mode(0);
+        if self.control.contains(ChannelControl::StartTrigger) {
+            self.start_sync_mode(0);
+        }
     }
 
     fn start_sync_mode(&mut self, mode: u32) {
@@ -329,6 +326,6 @@ bitflags::bitflags! {
         const SyncMode          = bits![9, 10];
         const ChopEnable        = bit!(8);
         const DecAddr           = bit!(1);
-        const TransferDir       = bit!(0);
+        const TransferDir       = bit!(0); // 1 = From RAM
     }
 }

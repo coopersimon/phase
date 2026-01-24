@@ -3,8 +3,8 @@ use crate::{interrupt::Interrupt, utils::{bits::*, interface::MemInterface}};
 /// Timers for PSX.
 pub struct Timers {
     timers: [Timer; 3],
-    in_hblank: bool,
-    in_vblank: bool,
+    in_h_blank: bool,
+    in_v_blank: bool,
 
     clock_div:  usize,
 }
@@ -17,17 +17,17 @@ impl Timers {
                 Timer::new(true),
                 Timer::new(false),
             ],
-            in_hblank: false,
-            in_vblank: false,
+            in_h_blank: false,
+            in_v_blank: false,
 
             clock_div: 0,
         }
     }
 
-    pub fn clock(&mut self, cycles: usize, hblank: bool, vblank: bool) -> Interrupt {
+    pub fn clock(&mut self, cycles: usize, h_blank: bool, v_blank: bool) -> Interrupt {
         let mut interrupt = Interrupt::empty();
         
-        let entered_hblank = self.set_blanks(hblank, vblank);
+        let entered_h_blank = self.set_blanks(h_blank, v_blank);
         if self.timers[0].use_sys_clock() {
             if self.timers[0].clock(cycles) {
                 interrupt |= Interrupt::Timer0;
@@ -39,7 +39,7 @@ impl Timers {
             if self.timers[1].clock(cycles) {
                 interrupt |= Interrupt::Timer1;
             }
-        } else if entered_hblank { // H-blank.
+        } else if entered_h_blank { // H-blank.
             if self.timers[1].clock(1) {
                 interrupt |= Interrupt::Timer1;
             }
@@ -61,23 +61,23 @@ impl Timers {
     /// Update current h- and v-blank status.
     /// 
     /// Returns true if h-blank has been entered.
-    fn set_blanks(&mut self, hblank: bool, vblank: bool) -> bool {
-        let entered_hblank = !self.in_hblank && hblank;
-        if entered_hblank {
+    fn set_blanks(&mut self, h_blank: bool, v_blank: bool) -> bool {
+        let entered_h_blank = !self.in_h_blank && h_blank;
+        if entered_h_blank {
             self.timers[0].blank_begin();
         }
-        if self.in_hblank && !hblank {
+        if self.in_h_blank && !h_blank {
             self.timers[0].blank_end();
         }
-        if !self.in_vblank && vblank {
+        if !self.in_v_blank && v_blank {
             self.timers[1].blank_begin();
         }
-        if self.in_vblank && !vblank {
+        if self.in_v_blank && !v_blank {
             self.timers[1].blank_end();
         }
-        self.in_hblank = hblank;
-        self.in_vblank = vblank;
-        entered_hblank
+        self.in_h_blank = h_blank;
+        self.in_v_blank = v_blank;
+        entered_h_blank
     }
 }
 

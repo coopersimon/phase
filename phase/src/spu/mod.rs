@@ -1,8 +1,10 @@
 use std::collections::VecDeque;
 
+use mips::mem::Data;
+
 use crate::{
     interrupt::Interrupt,
-    mem::ram::RAM,
+    mem::{DMADevice, ram::RAM},
     utils::{bits::*, interface::MemInterface}
 };
 
@@ -170,6 +172,22 @@ impl MemInterface for SPU {
     }
 }
 
+impl DMADevice for SPU {
+    fn dma_read_word(&mut self) -> Data<u32> {
+        // TODO: further checks here.
+        let data = self.ram.read_word(self.ram_full_addr);
+        self.ram_full_addr += 4;
+        Data { data, cycles: 1 }
+    }
+
+    fn dma_write_word(&mut self, data: u32) -> usize {
+        // TODO: further checks here.
+        self.ram.write_word(self.ram_full_addr, data);
+        self.ram_full_addr += 4;
+        1
+    }
+}
+
 // Internal
 impl SPU {
     fn set_control(&mut self, data: u16) {
@@ -207,7 +225,6 @@ impl SPU {
 
     fn transfer_from_fifo(&mut self) {
         if let Some(data) = self.ram_fifo.pop_front() {
-            println!("write SPU RAM {:X}", self.ram_full_addr);
             self.ram.write_halfword(self.ram_full_addr, data);
             self.ram_full_addr += 2;
         } else { // Done!

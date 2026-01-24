@@ -6,6 +6,7 @@ mod timer;
 mod cdrom;
 mod expansion;
 mod spu;
+mod gpu;
 mod utils;
 
 use std::path::PathBuf;

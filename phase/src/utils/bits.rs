@@ -10,4 +10,10 @@ macro_rules! bits {
     };
 }
 
-pub(crate) use {bit, bits};
+macro_rules! test_bit {
+    ($val:expr, $bit_num:expr) => {
+        ($val & bit!($bit_num)) != 0
+    };
+}
+
+pub(crate) use {bit, bits, test_bit};
