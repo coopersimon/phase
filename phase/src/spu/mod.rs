@@ -1,0 +1,294 @@
+use std::collections::VecDeque;
+
+use crate::{
+    interrupt::Interrupt,
+    mem::ram::RAM,
+    utils::{bits::*, interface::MemInterface}
+};
+
+#[derive(Default)]
+struct Stereo {
+    left: u16,
+    right: u16,
+}
+
+const SPU_RAM_SIZE: usize = 512 * 1024;
+const SPU_FIFO_SIZE: usize = 32;
+
+/// Sound processing unit.
+pub struct SPU {
+    voices: [Voice; 24],
+    ram: RAM,
+    ram_full_addr: u32,
+    ram_fifo: VecDeque<u16>,
+    transfer_fifo: bool,
+
+    // Registers
+    ram_addr: u16,
+    ram_irq_addr: u16,
+    ram_ctrl: u16,
+
+    main_vol: Stereo,
+    cd_input_vol: Stereo,
+    ext_input_vol: Stereo,
+
+    control: SPUControl,
+    status: SPUStatus,
+}
+
+impl SPU {
+    pub fn new() -> Self{
+        Self {
+            voices: Default::default(),
+            ram: RAM::new(SPU_RAM_SIZE),
+            ram_full_addr: 0,
+            ram_fifo: VecDeque::new(),
+            transfer_fifo: false,
+
+            ram_addr: 0,
+            ram_irq_addr: 0,
+            ram_ctrl: 0,
+
+            main_vol: Default::default(),
+            cd_input_vol: Default::default(),
+            ext_input_vol: Default::default(),
+
+            control: SPUControl::empty(),
+            status: SPUStatus::empty(),
+        }
+    }
+
+    pub fn clock(&mut self, cycles: usize) -> Interrupt {
+        // TODO: clock...
+
+        if self.transfer_fifo {
+            self.transfer_from_fifo();
+        }
+
+        if self.control.contains(SPUControl::Enable | SPUControl::IRQEnable) &&
+            self.status.contains(SPUStatus::IRQ) {
+            Interrupt::SPU
+        } else {
+            Interrupt::empty()
+        }
+    }
+}
+
+impl MemInterface for SPU {
+    fn read_halfword(&mut self, addr: u32) -> u16 {
+        match addr {
+            0x1F80_1C00..=0x1F80_1D7F => {
+                let voice_idx = (addr >> 4) & 0x1F;
+                self.voices[voice_idx as usize].read_halfword(addr & 0xF)
+            },
+            0x1F80_1D80 => self.main_vol.left,
+            0x1F80_1D82 => self.main_vol.right,
+            0x1F80_1D84 => 0, // TODO: reverb vol
+            0x1F80_1D86 => 0, // TODO: reverb vol
+            0x1F80_1D88 => 0, // TODO:KON flags
+            0x1F80_1D8A => 0, // TODO:KON flags
+            0x1F80_1D8C => 0, // TODO:KOFF flags
+            0x1F80_1D8E => 0, // TODO:KOFF flags
+            0x1F80_1D90 => 0, // TODO:PMOD flags
+            0x1F80_1D92 => 0, // TODO:PMOD flags
+            0x1F80_1D94 => 0, // TODO:Noise flags
+            0x1F80_1D96 => 0, // TODO:Noise flags
+            0x1F80_1D98 => 0, // TODO:Echo flags
+            0x1F80_1D9A => 0, // TODO:Echo flags
+            0x1F80_1D9C => 0, // TODO:ENDX flags
+            0x1F80_1D9E => 0, // TODO:ENDX flags
+            0x1F80_1DA2 => 0, // TODO: reverb base
+            0x1F80_1DA4 => self.ram_irq_addr,
+            0x1F80_1DA6 => self.ram_addr,
+            0x1F80_1DAA => self.control.bits(),
+            0x1F80_1DAC => self.ram_ctrl,
+            0x1F80_1DAE => self.status.bits(),
+            0x1F80_1DB0 => self.cd_input_vol.left,
+            0x1F80_1DB2 => self.cd_input_vol.right,
+            0x1F80_1DB4 => self.ext_input_vol.left,
+            0x1F80_1DB6 => self.ext_input_vol.right,
+            0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
+                0
+            },
+            _ => panic!("invalid SPU address {:X}", addr)
+        }
+    }
+
+    fn write_halfword(&mut self, addr: u32, data: u16) {
+        match addr {
+            0x1F80_1C00..=0x1F80_1D7F => {
+                let voice_idx = (addr >> 4) & 0x1F;
+                self.voices[voice_idx as usize].write_halfword(addr & 0xF, data);
+            },
+            0x1F80_1D80 => self.main_vol.left = data,
+            0x1F80_1D82 => self.main_vol.right = data,
+            0x1F80_1D84 => {}, // TODO: reverb vol
+            0x1F80_1D86 => {}, // TODO: reverb vol
+            0x1F80_1D88 => {}, // TODO:KON flags
+            0x1F80_1D8A => {}, // TODO:KON flags
+            0x1F80_1D8C => {}, // TODO:KOFF flags
+            0x1F80_1D8E => {}, // TODO:KOFF flags
+            0x1F80_1D90 => {}, // TODO:PMOD flags
+            0x1F80_1D92 => {}, // TODO:PMOD flags
+            0x1F80_1D94 => {}, // TODO:Noise flags
+            0x1F80_1D96 => {}, // TODO:Noise flags
+            0x1F80_1D98 => {}, // TODO:Echo flags
+            0x1F80_1D9A => {}, // TODO:Echo flags
+            0x1F80_1DA2 => {}, // TODO: reverb base
+            0x1F80_1DA4 => self.ram_irq_addr = data,
+            0x1F80_1DA6 => {
+                self.ram_addr = data;
+                self.ram_full_addr = (self.ram_addr as u32) << 3;
+            },
+            0x1F80_1DA8 => self.write_fifo(data),
+            0x1F80_1DAA => self.set_control(data),
+            0x1F80_1DAC => self.ram_ctrl = data,
+            0x1F80_1DB0 => self.cd_input_vol.left = data,
+            0x1F80_1DB2 => self.cd_input_vol.right = data,
+            0x1F80_1DB4 => self.ext_input_vol.left = data,
+            0x1F80_1DB6 => self.ext_input_vol.right = data,
+            0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
+                
+            },
+            _ => panic!("invalid SPU address {:X}", addr)
+        }
+    }
+
+    // Usually SPU should not be accessed via word interface.
+
+    fn read_word(&mut self, addr: u32) -> u32 {
+        let lo = self.read_halfword(addr) as u32;
+        let hi = self.read_halfword(addr + 2) as u32;
+        lo | (hi << 16)
+    }
+
+    fn write_word(&mut self, addr: u32, data: u32) {
+        let lo = data as u16;
+        let hi = (data >> 16) as u16;
+        self.write_halfword(addr, lo);
+        self.write_halfword(addr + 2, hi);
+    }
+}
+
+// Internal
+impl SPU {
+    fn set_control(&mut self, data: u16) {
+        self.control = SPUControl::from_bits_truncate(data);
+        if !self.control.contains(SPUControl::IRQEnable) {
+            // Acknowledge
+            self.status.remove(SPUStatus::IRQ);
+        }
+        // Set mode bits.
+        self.status.remove(SPUStatus::SPUMode);
+        let new_mode = (self.control & SPUControl::SPUMode).bits();
+        self.status.insert(SPUStatus::from_bits_truncate(new_mode));
+        // Set DMA mode.
+        self.status.remove(SPUStatus::DMABits);
+        self.transfer_fifo = false;
+        match (self.control & SPUControl::SoundRAMTransfer).bits() >> 4 {
+            0b00 => {}, // Stop
+            0b01 => {   // Manual
+                self.transfer_fifo = true;
+                self.status.insert(SPUStatus::TransferBusy);
+            },
+            0b10 => self.status.insert(SPUStatus::DMAWriteReq | SPUStatus::DMATransferReq),
+            0b11 => self.status.insert(SPUStatus::DMAReadReq | SPUStatus::DMATransferReq),
+            _ => unreachable!()
+        }
+    }
+
+    fn write_fifo(&mut self, data: u16) {
+        if self.ram_fifo.len() < SPU_FIFO_SIZE {
+            self.ram_fifo.push_back(data);
+        } else {
+            panic!("writing too much data to SPU RAM!");
+        }
+    }
+
+    fn transfer_from_fifo(&mut self) {
+        if let Some(data) = self.ram_fifo.pop_front() {
+            println!("write SPU RAM {:X}", self.ram_full_addr);
+            self.ram.write_halfword(self.ram_full_addr, data);
+            self.ram_full_addr += 2;
+        } else { // Done!
+            self.status.remove(SPUStatus::TransferBusy);
+            self.transfer_fifo = false;
+        }
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    struct SPUControl: u16 {
+        const Enable            = bit!(15);
+        const Mute              = bit!(14);
+        const NoiseFreqShift    = bits![10, 11, 12, 13];
+        const NoiseFreqStep     = bits![8, 9];
+        const ReverbEnable      = bit!(7);
+        const IRQEnable         = bit!(6);
+        const SoundRAMTransfer  = bits![4, 5];
+        const ExtAudioReverb    = bit!(3);
+        const CDAudioReverb     = bit!(2);
+        const ExtAudioEnable    = bit!(1);
+        const CDAudioEnable     = bit!(0);
+
+        const SPUMode           = bits![0, 1, 2, 3, 4, 5];
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    struct SPUStatus: u16 {
+        const CaptureBuffers    = bit!(11);
+        const TransferBusy      = bit!(10);
+        const DMAReadReq        = bit!(9);
+        const DMAWriteReq       = bit!(8);
+        const DMATransferReq    = bit!(7);
+        const IRQ               = bit!(6);
+        const SPUMode           = bits![0, 1, 2, 3, 4, 5];
+
+        const DMABits           = bits![7, 8, 9];
+    }
+}
+
+#[derive(Default)]
+struct Voice {
+    vol_left:       u16,    // 0
+    vol_right:      u16,    // 2
+    sample_rate:    u16,    // 4
+    start_addr:     u16,    // 6
+    adsr_lo:        u16,    // 8
+    adsr_hi:        u16,    // A
+    adsr_vol:       u16,    // C
+    repeat_addr:    u16,    // E
+}
+
+impl Voice {
+    fn read_halfword(&self, addr: u32) -> u16 {
+        match addr {
+            0x0 => self.vol_left,
+            0x2 => self.vol_right,
+            0x4 => self.sample_rate,
+            0x6 => self.start_addr,
+            0x8 => self.adsr_lo,
+            0xA => self.adsr_hi,
+            0xC => self.adsr_vol,
+            0xE => self.repeat_addr,
+            _ => unreachable!()
+        }
+    }
+
+    fn write_halfword(&mut self, addr: u32, data: u16) {
+        match addr {
+            0x0 => self.vol_left = data,
+            0x2 => self.vol_right = data,
+            0x4 => self.sample_rate = data,
+            0x6 => self.start_addr = data,
+            0x8 => self.adsr_lo = data,
+            0xA => self.adsr_hi = data,
+            0xC => self.adsr_vol = data,
+            0xE => self.repeat_addr = data,
+            _ => unreachable!()
+        }
+    }
+}

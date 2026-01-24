@@ -52,7 +52,7 @@ impl MemInterface for InterruptControl {
 
     fn write_word(&mut self, addr: u32, data: u32) {
         match addr {
-            0x1F801070 => self.status.remove(!Interrupt::from_bits_truncate(data)),
+            0x1F801070 => self.status.remove(Interrupt::from_bits_truncate(!data)),
             0x1F801074 => self.mask = Interrupt::from_bits_truncate(data),
             _ => unreachable!()
         }

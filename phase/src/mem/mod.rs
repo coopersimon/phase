@@ -10,6 +10,7 @@ use control::MemControl;
 use dma::DMA;
 
 use crate::PlayStationConfig;
+use crate::spu::SPU;
 use crate::utils::interface::MemInterface;
 use crate::interrupt::InterruptControl;
 use crate::timer::Timers;
@@ -24,8 +25,9 @@ pub struct MemBus {
     interrupts: InterruptControl,
 
     timers: Timers,
-    dma: DMA,
-    cdrom: CDROM,
+    dma:    DMA,
+    cdrom:  CDROM,
+    spu:    SPU,
 
     expansion_port_1: ExpansionPort1,
     expansion_port_2: ExpansionPort2,
@@ -42,8 +44,9 @@ impl MemBus {
             interrupts: InterruptControl::new(),
 
             timers: Timers::new(),
-            dma: DMA::new(),
-            cdrom: CDROM::new(),
+            dma:    DMA::new(),
+            cdrom:  CDROM::new(),
+            spu:    SPU::new(),
 
             expansion_port_1: ExpansionPort1::new(),
             expansion_port_2: ExpansionPort2::new(),
@@ -61,10 +64,13 @@ impl MemBus {
 
         let cd_irq = self.cdrom.clock(cycles);
 
+        let spu_irq = self.spu.clock(cycles);
+
         self.interrupts.trigger_irq(
             dma_irq |
             timer_irq |
-            cd_irq
+            cd_irq |
+            spu_irq
         );
     }
 
@@ -179,6 +185,7 @@ impl Mem32 for MemBus {
 impl MemBus {
     /// Mutably reference an I/O device.
     fn mut_io_device<'a>(&'a mut self, addr: u32) -> Option<&'a mut dyn MemInterface> {
+        println!("access I/O {:X}", addr);
         match addr {
             0x1F80_1000..=0x1F80_1023 => Some(&mut self.control),
             0x1F80_1040..=0x1F80_105F => None, // Peripheral
@@ -189,8 +196,7 @@ impl MemBus {
             0x1F80_1800..=0x1F80_1807 => Some(&mut self.cdrom),
             0x1F80_1810..=0x1F80_1817 => None, // GPU
             0x1F80_1820..=0x1F80_1827 => None, // MDEC
-            0x1F80_1C00..=0x1F80_1C0F => None, // SPU
-            0x1F80_1D80..=0x1F80_1FFF => None, // SPU
+            0x1F80_1C00..=0x1F80_1FFF => Some(&mut self.spu),
             _ => panic!("no such I/O device at {:X}", addr),
         }
     }
