@@ -1,4 +1,4 @@
-use crate::{interrupt::Interrupt, utils::{bits::*, interface::MemInterface}};
+use crate::{gpu::GPUClockRes, interrupt::Interrupt, utils::{bits::*, interface::MemInterface}};
 
 /// Timers for PSX.
 pub struct Timers {
@@ -24,16 +24,18 @@ impl Timers {
         }
     }
 
-    pub fn clock(&mut self, cycles: usize, h_blank: bool, v_blank: bool) -> Interrupt {
+    pub fn clock(&mut self, cycles: usize, gpu: &GPUClockRes) -> Interrupt {
         let mut interrupt = Interrupt::empty();
         
-        let entered_h_blank = self.set_blanks(h_blank, v_blank);
+        let entered_h_blank = self.set_blanks(gpu.in_h_blank, gpu.in_v_blank);
         if self.timers[0].use_sys_clock() {
             if self.timers[0].clock(cycles) {
                 interrupt |= Interrupt::Timer0;
             }
         } else { // Dot clock.
-            // TODO.
+            if self.timers[0].clock(gpu.dots) {
+                interrupt |= Interrupt::Timer0;
+            }
         }
         if self.timers[1].use_sys_clock() {
             if self.timers[1].clock(cycles) {
@@ -61,22 +63,22 @@ impl Timers {
     /// Update current h- and v-blank status.
     /// 
     /// Returns true if h-blank has been entered.
-    fn set_blanks(&mut self, h_blank: bool, v_blank: bool) -> bool {
-        let entered_h_blank = !self.in_h_blank && h_blank;
+    fn set_blanks(&mut self, in_h_blank: bool, in_v_blank: bool) -> bool {
+        let entered_h_blank = !self.in_h_blank && in_h_blank;
         if entered_h_blank {
             self.timers[0].blank_begin();
         }
-        if self.in_h_blank && !h_blank {
+        if self.in_h_blank && !in_h_blank {
             self.timers[0].blank_end();
         }
-        if !self.in_v_blank && v_blank {
+        if !self.in_v_blank && in_v_blank {
             self.timers[1].blank_begin();
         }
-        if self.in_v_blank && !v_blank {
+        if self.in_v_blank && !in_v_blank {
             self.timers[1].blank_end();
         }
-        self.in_h_blank = h_blank;
-        self.in_v_blank = v_blank;
+        self.in_h_blank = in_h_blank;
+        self.in_v_blank = in_v_blank;
         entered_h_blank
     }
 }

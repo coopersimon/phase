@@ -63,7 +63,7 @@ impl MemBus {
 
         let dma_irq = self.dma.check_irq();
 
-        let timer_irq = self.timers.clock(cycles, gpu_stat.h_blank, gpu_stat.v_blank);
+        let timer_irq = self.timers.clock(cycles, &gpu_stat);
 
         let cd_irq = self.cdrom.clock(cycles);
 

@@ -1,7 +1,7 @@
 use crate::utils::{bits::*, interface::MemInterface};
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Default)]
     pub struct Interrupt: u32 {
         const ControllerLightpen    = bit!(10);
         const SPU                   = bit!(9);

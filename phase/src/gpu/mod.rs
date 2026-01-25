@@ -1,29 +1,25 @@
+mod videostate;
+
 use std::collections::VecDeque;
 
 use mips::mem::Data;
 
 use crate::{
-    interrupt::Interrupt,
     mem::{DMADevice, ram::RAM},
     utils::{bits::*, interface::MemInterface}
 };
 
+use videostate::StateMachine;
+pub use videostate::GPUClockRes;
 
 const VRAM_SIZE: usize = 1024 * 1024;
-
-/// Returned when clocking the GPU.
-/// 
-/// Indicates state of interrupt / blanking.
-pub struct GPUClockRes {
-    pub irq: Interrupt,
-    pub v_blank: bool,
-    pub h_blank: bool,
-}
 
 /// Graphics processing unit
 pub struct GPU {
     vram: RAM,
     status: GPUStatus,
+
+    state: StateMachine,
 
     gp0_fifo: VecDeque<u32>,
     read_reg: u32,
@@ -35,24 +31,26 @@ impl GPU {
             vram: RAM::new(VRAM_SIZE),
             status: GPUStatus::CommandReady | GPUStatus::DMARecvReady,
 
+            state: StateMachine::new(),
+
             gp0_fifo: VecDeque::new(),
             read_reg: 0,
         }
     }
 
     pub fn clock(&mut self, cycles: usize) -> GPUClockRes {
-        // TODO: clock.
+        let res = if self.status.contains(GPUStatus::DisplayEnable) {
+            self.state.clock(cycles)
+        } else {
+            GPUClockRes::default()
+        };
 
         while let Some(data) = self.gp0_fifo.pop_front() {
             self.exec_gp0_command(data);
         }
         self.status.insert(GPUStatus::CommandReady | GPUStatus::DMARecvReady);
 
-        GPUClockRes {
-            irq: Interrupt::empty(),
-            v_blank: false,
-            h_blank: false
-        }
+        res
     }
 }
 
@@ -101,7 +99,7 @@ impl GPU {
             0x02 => self.acknowledge_irq(),
             0x03 => self.display_enable(data),
             0x04 => self.data_request(data),
-            0x05 => self.display_origin(data),
+            0x05 => self.display_vram_offset(data),
             0x06 => self.display_width(data),
             0x07 => self.display_height(data),
             0x08 => self.display_mode(data),
@@ -117,7 +115,7 @@ impl GPU {
 
     fn read_status(&self) -> u32 {
         let stat = self.status.bits();
-        println!("Read stat: {:X}", stat);
+        //println!("Read stat: {:X}", stat);
         stat
     }
 
@@ -153,7 +151,7 @@ impl GPU {
         self.acknowledge_irq();
         self.display_enable(1);
         self.data_request(0);
-        self.display_origin(0);
+        self.display_vram_offset(0);
         let reset_x = 0x200 | ((0x200 + 256 * 10) << 12);
         self.display_width(reset_x);
         let reset_y = 0x010 | ((0x010 + 240) << 12);
@@ -179,16 +177,16 @@ impl GPU {
         self.status.insert(GPUStatus::from_bits_truncate(dma_mode << 29));
     }
 
-    fn display_origin(&mut self, param: u32) {
+    fn display_vram_offset(&mut self, param: u32) {
 
     }
 
     fn display_width(&mut self, param: u32) {
-        
+        // TODO: send to video state.
     }
 
     fn display_height(&mut self, param: u32) {
-        
+        // TODO: send to video state
     }
 
     fn display_mode(&mut self, param: u32) {
@@ -196,6 +194,18 @@ impl GPU {
         self.status.insert(GPUStatus::from_bits_truncate((param & 0x3F) << 17));
         self.status.insert(GPUStatus::from_bits_truncate((param & 0x40) << 10)); // HRes low bit
         self.status.insert(GPUStatus::from_bits_truncate((param & 0x80) << 7)); // Reverseflag
+        let h_res = match (self.status & GPUStatus::XResolution).bits() >> 16 {
+            0b000 => 256,
+            0b010 => 320,
+            0b100 => 512,
+            0b110 => 640,
+            _ => 368,
+        };
+        if self.status.contains(GPUStatus::PALMode) {
+            panic!("PAL mode unsupported!");
+        } else {
+            self.state.set_h_res_ntsc(h_res);
+        }
     }
 
     fn get_gpu_info(&mut self, param: u32) {
