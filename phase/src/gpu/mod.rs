@@ -100,8 +100,8 @@ impl GPU {
             0x03 => self.display_enable(data),
             0x04 => self.data_request(data),
             0x05 => self.display_vram_offset(data),
-            0x06 => self.display_width(data),
-            0x07 => self.display_height(data),
+            0x06 => self.display_range_x(data),
+            0x07 => self.display_range_y(data),
             0x08 => self.display_mode(data),
             0x09 => self.tex_disable(data),
             0x10 => self.get_gpu_info(data),
@@ -153,9 +153,9 @@ impl GPU {
         self.data_request(0);
         self.display_vram_offset(0);
         let reset_x = 0x200 | ((0x200 + 256 * 10) << 12);
-        self.display_width(reset_x);
+        self.display_range_x(reset_x);
         let reset_y = 0x010 | ((0x010 + 240) << 12);
-        self.display_height(reset_y);
+        self.display_range_y(reset_y);
         self.display_mode(0);
     }
 
@@ -178,15 +178,20 @@ impl GPU {
     }
 
     fn display_vram_offset(&mut self, param: u32) {
-
+        let _x = param & 0x3FF;
+        let _y = (param >> 10) & 0x1FF;
     }
 
-    fn display_width(&mut self, param: u32) {
+    fn display_range_x(&mut self, param: u32) {
         // TODO: send to video state.
+        let _x_left = param & 0xFFF;
+        let _x_right = (param >> 12) & 0xFFF;
     }
 
-    fn display_height(&mut self, param: u32) {
+    fn display_range_y(&mut self, param: u32) {
         // TODO: send to video state
+        let _y_top = param & 0x3FF;
+        let _y_bottom = (param >> 10) & 0x3FF;
     }
 
     fn display_mode(&mut self, param: u32) {

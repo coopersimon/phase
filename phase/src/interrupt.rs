@@ -32,12 +32,25 @@ impl InterruptControl {
 
     /// Trigger newly occurring interrupts.
     pub fn trigger_irq(&mut self, int: Interrupt) {
+        if !int.is_empty() {
+            //println!("trigger int: {:X}", int.bits());
+        }
         self.status.insert(int);
     }
 
     /// Returns true if any pending interrupts overlap with the interrupt mask.
     pub fn check_irq(&self) -> bool {
         self.status.intersects(self.mask)
+    }
+
+    fn acknowledge_irq(&mut self, data: u32) {
+        let ack = Interrupt::from_bits_truncate(!data);
+        self.status.remove(ack);
+    }
+
+    fn set_mask(&mut self, data: u32) {
+        //println!("set i mask: {:X}", data);
+        self.mask = Interrupt::from_bits_truncate(data);
     }
 }
 
@@ -52,8 +65,8 @@ impl MemInterface for InterruptControl {
 
     fn write_word(&mut self, addr: u32, data: u32) {
         match addr {
-            0x1F801070 => self.status.remove(Interrupt::from_bits_truncate(!data)),
-            0x1F801074 => self.mask = Interrupt::from_bits_truncate(data),
+            0x1F801070 => self.acknowledge_irq(data),
+            0x1F801074 => self.set_mask(data),
             _ => unreachable!()
         }
     }

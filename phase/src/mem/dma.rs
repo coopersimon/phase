@@ -1,6 +1,9 @@
 use mips::mem::Data;
 
-use crate::{interrupt::Interrupt, utils::{bits::*, interface::MemInterface}};
+use crate::{
+    interrupt::Interrupt,
+    utils::{bits::*, interface::MemInterface}
+};
 
 /// Device that is capable of sending and/or receiving
 /// data via DMA.
@@ -16,10 +19,11 @@ pub trait DMADevice {
 
 /// Direct memory access.
 pub struct DMA {
-    channels: [DMAChannel; 7],
-    control: DMAControl,
-    interrupt: DMAInterrupt,
-    irq_pending: bool,
+    channels:           [DMAChannel; 7],
+    control:            DMAControl,
+    interrupt:          DMAInterrupt,
+    irq_pending:        bool,
+    table_generator:    OrderingTableGen,
 }
 
 /// Represents a single word transfer via DMA.
@@ -34,10 +38,11 @@ pub struct DMATransfer {
 impl DMA {
     pub fn new() -> Self {
         Self {
-            channels: core::array::from_fn(|_| DMAChannel::new()),
-            control: DMAControl::empty(),
-            interrupt: DMAInterrupt::empty(),
-            irq_pending: false,
+            channels:           core::array::from_fn(|_| DMAChannel::new()),
+            control:            DMAControl::empty(),
+            interrupt:          DMAInterrupt::empty(),
+            irq_pending:        false,
+            table_generator:    OrderingTableGen::new(),
         }
     }
 
@@ -69,6 +74,10 @@ impl DMA {
         self.channels[2].start_sync_mode(2);
     }
 
+    pub fn mut_table_gen<'a>(&'a mut self) -> &'a mut OrderingTableGen {
+        &mut self.table_generator
+    }
+
     /// Get the DMA address for the channel provided.
     /// 
     /// If None, then no transfers are necessary.
@@ -85,13 +94,13 @@ impl DMA {
                 current = Some(n);
             }
         }
-        if let Some(chan) = current {
-            let channel = &mut self.channels[chan];
+        if let Some(chan_idx) = current {
+            let channel = &mut self.channels[chan_idx];
             channel.control.remove(ChannelControl::StartTrigger);
             let transfer = Some(DMATransfer {
                 addr:       channel.current_addr,
                 from_ram:   channel.control.contains(ChannelControl::TransferDir),
-                device:     chan
+                device:     chan_idx
             });
             if channel.control.contains(ChannelControl::DecAddr) {
                 channel.current_addr -= 4;
@@ -99,7 +108,9 @@ impl DMA {
                 channel.current_addr += 4;
             }
             if channel.dec_word_count() {
-                channel.finish_block();
+                if channel.finish_block() {
+                    self.transfer_complete(chan_idx);
+                }
             }
             transfer
         } else {
@@ -123,6 +134,22 @@ impl DMA {
             self.interrupt.insert(DMAInterrupt::InterruptReq);
             if !irq { // Mark pending IRQ if request bit changes 0 => 1.
                 self.irq_pending = true;
+            }
+        }
+    }
+
+    /// Set IRQ bit and trigger IRQ if necessary.
+    fn transfer_complete(&mut self, channel: usize) {
+        let mask_bit = 1 << (channel + 16);
+        if self.interrupt.contains(DMAInterrupt::from_bits_truncate(mask_bit)) {
+            let irq_bit = 1 << (channel + 24);
+            self.interrupt.insert(DMAInterrupt::from_bits_truncate(irq_bit));
+            if self.interrupt.contains(DMAInterrupt::EnableIRQ) {
+                // Mark pending IRQ if request bit changes 0 => 1.
+                if !self.interrupt.contains(DMAInterrupt::InterruptReq) {
+                    self.interrupt.insert(DMAInterrupt::InterruptReq);
+                    self.irq_pending = true;
+                }
             }
         }
     }
@@ -196,7 +223,12 @@ impl MemInterface for DMA {
             
             0x1F8010E0 => self.channels[6].set_addr(data),
             0x1F8010E4 => self.channels[6].block_control = data,
-            0x1F8010E8 => self.channels[6].set_control(data),
+            0x1F8010E8 => {
+                self.channels[6].set_control(data);
+                if self.channels[6].control.contains(ChannelControl::StartTrigger) {
+                    self.table_generator.init(self.channels[6].base_addr, self.channels[6].current_word_count);
+                }
+            },
             
             0x1F8010F0 => self.set_control(data),
             0x1F8010F4 => self.set_interrupt(data),
@@ -307,11 +339,15 @@ impl DMAChannel {
         self.current_word_count == 0
     }
 
-    fn finish_block(&mut self) {
+    /// Finish a transfer block.
+    /// Returns true if the entire transfer is complete.
+    fn finish_block(&mut self) -> bool {
         if self.current_block_count == 0 {
             self.control.remove(ChannelControl::StartBusy);
+            true
         } else {
             self.current_block_count -= 1;
+            false
         }
     }
 }
@@ -327,5 +363,43 @@ bitflags::bitflags! {
         const ChopEnable        = bit!(8);
         const DecAddr           = bit!(1);
         const TransferDir       = bit!(0); // 1 = From RAM
+    }
+}
+
+/// Reverse ordering table generator.
+/// Used by DMA channel 6 to initialize in RAM.
+pub struct OrderingTableGen {
+    write_addr: u32,
+    count:      u32,
+}
+
+impl OrderingTableGen {
+    fn new() -> Self {
+        Self {
+            write_addr: 0,
+            count:      0,
+        }
+    }
+
+    fn init(&mut self, addr: u32, count: u32) {
+        self.write_addr = addr;
+        self.count = count;
+    }
+}
+
+impl DMADevice for OrderingTableGen {
+    fn dma_read_word(&mut self) -> Data<u32> {
+        self.count -= 1;
+        let data = if self.count == 0 {
+            0x00FF_FFFF
+        } else {
+            self.write_addr -= 4;
+            self.write_addr
+        };
+        Data { data, cycles: 1 }
+    }
+
+    fn dma_write_word(&mut self, _data: u32) -> usize {
+        panic!("cannot write to DMA ordering table");
     }
 }

@@ -224,7 +224,7 @@ impl MemBus {
             3 => &mut self.cdrom,
             4 => &mut self.spu,
             5 => unimplemented!("expansion port DMA"),
-            6 => unimplemented!("OTC DMA"), // GPU ordering table...
+            6 => self.dma.mut_table_gen(),
             _ => unreachable!()
         }
     }
