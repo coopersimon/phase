@@ -33,7 +33,12 @@ pub struct DMATransfer {
     pub addr:       u32,
     pub from_ram:   bool,
     pub device:     usize,
+    /// If list_data is `true`, then the data loaded
+    /// is linked-list metadata for the DMA system.
+    pub list_data:  bool,
 }
+
+pub const END_CODE: u32 = 0x00FF_FFFF;
 
 impl DMA {
     pub fn new() -> Self {
@@ -58,20 +63,21 @@ impl DMA {
     }
 
     pub fn mdec_req(&mut self) {
-        self.channels[0].start_sync_mode(1);
-        self.channels[1].start_sync_mode(1);
+        // TODO: this should be 2 different functions probably...
+        self.channels[0].start_sync_mode(DMA_REQ_MODE);
+        self.channels[1].start_sync_mode(DMA_REQ_MODE);
     }
 
     pub fn spu_req(&mut self) {
-        self.channels[4].start_sync_mode(1);
+        self.channels[4].start_sync_mode(DMA_REQ_MODE);
     }
 
     pub fn gpu_data_req(&mut self) {
-        self.channels[2].start_sync_mode(1);
+        self.channels[2].start_sync_mode(DMA_REQ_MODE);
     }
 
     pub fn gpu_command_req(&mut self) {
-        self.channels[2].start_sync_mode(2);
+        self.channels[2].start_sync_mode(DMA_LIST_MODE);
     }
 
     pub fn mut_table_gen<'a>(&'a mut self) -> &'a mut OrderingTableGen {
@@ -100,7 +106,8 @@ impl DMA {
             let transfer = Some(DMATransfer {
                 addr:       channel.current_addr,
                 from_ram:   channel.control.contains(ChannelControl::TransferDir),
-                device:     chan_idx
+                device:     chan_idx,
+                list_data:  channel.next_list_addr.is_none(),
             });
             if channel.control.contains(ChannelControl::DecAddr) {
                 channel.current_addr -= 4;
@@ -115,6 +122,15 @@ impl DMA {
             transfer
         } else {
             None
+        }
+    }
+
+    pub fn write_list_data(&mut self, channel_idx: usize, data: u32) {
+        let channel = &mut self.channels[channel_idx];
+        if channel.set_list_data(data) {
+            if channel.finish_block() {
+                self.transfer_complete(channel_idx);
+            }
         }
     }
 
@@ -157,8 +173,7 @@ impl DMA {
 
 impl MemInterface for DMA {
     fn read_word(&mut self, addr: u32) -> u32 {
-        //println!("DMA read {:X}", addr);
-        match addr {
+        let data = match addr {
             0x1F801080 => self.channels[0].base_addr,
             0x1F801084 => self.channels[0].block_control,
             0x1F801088 => self.channels[0].control.bits(),
@@ -191,7 +206,9 @@ impl MemInterface for DMA {
             0x1F8010F4 => self.interrupt.bits(),
 
             _ => panic!("invalid DMA address {:X}", addr),
-        }
+        };
+        //println!("DMA read {:X} from {:X}", data, addr);
+        data
     }
 
     fn write_word(&mut self, addr: u32, data: u32) {
@@ -296,6 +313,8 @@ struct DMAChannel {
     current_addr: u32,
     current_word_count: u32,
     current_block_count: u32,
+    next_list_addr: Option<u32>,
+    active: bool,
 }
 
 impl DMAChannel {
@@ -308,7 +327,13 @@ impl DMAChannel {
             current_addr: 0,
             current_word_count: 0,
             current_block_count: 0,
+            next_list_addr: None,
+            active: false,
         }
+    }
+
+    fn get_mode(&self) -> u32 {
+        (self.control & ChannelControl::SyncMode).bits() >> 9
     }
 
     fn set_addr(&mut self, data: u32) {
@@ -318,23 +343,49 @@ impl DMAChannel {
     fn set_control(&mut self, data: u32) {
         self.control = ChannelControl::from_bits_truncate(data);
         if self.control.contains(ChannelControl::StartTrigger) {
-            self.start_sync_mode(0);
+            self.start_sync_mode(DMA_IMM_MODE);
+        }
+        if self.control.contains(ChannelControl::StartBusy) && self.get_mode() != DMA_IMM_MODE {
+            self.next_list_addr = None;
+            self.current_addr = self.base_addr;
         }
     }
 
     fn start_sync_mode(&mut self, mode: u32) {
-        let current_mode = (self.control & ChannelControl::SyncMode).bits() >> 9;
+        let current_mode = self.get_mode();
         if mode == current_mode {
-            self.control.insert(ChannelControl::StartBusy);
-            self.current_addr = self.base_addr;
-            self.current_word_count = self.block_control & 0xFFFF;
-            self.current_block_count = (self.block_control >> 16) & 0xFFFF;
+            if current_mode == DMA_IMM_MODE {
+                self.control.insert(ChannelControl::StartBusy);
+                self.active = true;
+                self.current_addr = self.base_addr;
+                self.current_word_count = self.block_control & 0xFFFF;
+                self.current_block_count = (self.block_control >> 16) & 0xFFFF;
+            } else if self.control.contains(ChannelControl::StartBusy) {
+                self.active = true;
+            }
         }
+    }
+
+    /// Set list data for the channel, for a node.
+    /// Usually only used by channel 2, for GPU command data.
+    /// 
+    /// Returns true if this node is empty.
+    fn set_list_data(&mut self, data: u32) -> bool {
+        self.current_word_count = data >> 24;
+        self.next_list_addr = Some(data & 0xFF_FFFF);
+        self.current_word_count == 0
     }
 
     /// Decrement the block by 1.
     /// Returns true if the block is complete.
     fn dec_word_count(&mut self) -> bool {
+        let mode = self.get_mode();
+        if mode == DMA_LIST_MODE && self.next_list_addr.is_none() {
+            return false;
+        }
+        if mode == DMA_LIST_MODE || mode == DMA_REQ_MODE {
+            self.active = false;
+        }
         self.current_word_count = self.current_word_count.wrapping_sub(1);
         self.current_word_count == 0
     }
@@ -342,7 +393,17 @@ impl DMAChannel {
     /// Finish a transfer block.
     /// Returns true if the entire transfer is complete.
     fn finish_block(&mut self) -> bool {
-        if self.current_block_count == 0 {
+        if self.get_mode() == DMA_LIST_MODE {
+            // TODO: this should probably not panic.
+            let next_addr = self.next_list_addr.take().expect("no next address for list data!");
+            if next_addr == END_CODE {
+                self.control.remove(ChannelControl::StartBusy);
+                true
+            } else {
+                self.current_addr = next_addr;
+                false
+            }
+        } else if self.current_block_count == 0 {
             self.control.remove(ChannelControl::StartBusy);
             true
         } else {
@@ -365,6 +426,10 @@ bitflags::bitflags! {
         const TransferDir       = bit!(0); // 1 = From RAM
     }
 }
+
+const DMA_IMM_MODE: u32 = 0;
+const DMA_REQ_MODE: u32 = 1;
+const DMA_LIST_MODE: u32 = 2;
 
 /// Reverse ordering table generator.
 /// Used by DMA channel 6 to initialize in RAM.
@@ -391,7 +456,7 @@ impl DMADevice for OrderingTableGen {
     fn dma_read_word(&mut self) -> Data<u32> {
         self.count -= 1;
         let data = if self.count == 0 {
-            0x00FF_FFFF
+            END_CODE
         } else {
             self.write_addr -= 4;
             self.write_addr

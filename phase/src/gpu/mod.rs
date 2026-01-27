@@ -39,11 +39,7 @@ impl GPU {
     }
 
     pub fn clock(&mut self, cycles: usize) -> GPUClockRes {
-        let res = if self.status.contains(GPUStatus::DisplayEnable) {
-            self.state.clock(cycles)
-        } else {
-            GPUClockRes::default()
-        };
+        let res = self.state.clock(cycles);
 
         while let Some(data) = self.gp0_fifo.pop_front() {
             self.exec_gp0_command(data);
@@ -51,6 +47,13 @@ impl GPU {
         self.status.insert(GPUStatus::CommandReady | GPUStatus::DMARecvReady);
 
         res
+    }
+
+    /// Check if the GPU is ready to transfer via DMA,
+    /// using a command list.
+    pub fn dma_command_ready(&self) -> bool {
+        let mask = GPUStatus::DMAMode | GPUStatus::DMARecvReady;
+        (self.status & mask).bits() == GPUStatus::CommandTransferReady.bits()
     }
 }
 
@@ -79,7 +82,12 @@ impl DMADevice for GPU {
     }
 
     fn dma_write_word(&mut self, data: u32) -> usize {
-        // TODO.
+        let dma_mode = (self.status & GPUStatus::DMAMode).bits() >> 29;
+        if dma_mode == 2 {
+            self.send_gp0_command(data);
+        } else {
+            // ???
+        }
         1
     }
 }
@@ -114,9 +122,13 @@ impl GPU {
     }
 
     fn read_status(&self) -> u32 {
-        let stat = self.status.bits();
-        //println!("Read stat: {:X}", stat);
-        stat
+        if self.status.contains(GPUStatus::Interlace) {
+            let mut stat = self.status;
+            stat.set(GPUStatus::InterlaceOdd, self.state.get_interlace_bit());
+            stat.bits()
+        } else {
+            self.status.bits()
+        }
     }
 
     fn exec_gp0_command(&mut self, data: u32) {
@@ -211,6 +223,7 @@ impl GPU {
         } else {
             self.state.set_h_res_ntsc(h_res);
         }
+        self.state.set_interlace(self.status.contains(GPUStatus::Interlace));
     }
 
     fn get_gpu_info(&mut self, param: u32) {
@@ -258,5 +271,7 @@ bitflags::bitflags! {
 
         const DispModeFlags = bits![14, 16, 17, 18, 19, 20, 21, 22];
         const DrawModeFlags = bits![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15];
+
+        const CommandTransferReady = bits![28, 30];
     }
 }

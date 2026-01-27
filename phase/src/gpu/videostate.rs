@@ -1,6 +1,6 @@
 // This file manages timing of the video system.
 
-use crate::interrupt::Interrupt;
+use crate::{interrupt::Interrupt, utils::bits::*};
 
 /// Returned when clocking the GPU.
 /// 
@@ -32,7 +32,7 @@ impl GPUClockRes {
     }
     fn v_blank(dots: usize) -> Self {
         Self {
-            irq: Interrupt::VBLANK,
+            irq: Interrupt::empty(),
             in_v_blank: true,
             in_h_blank: false,
             dots
@@ -69,6 +69,8 @@ pub struct StateMachine {
     cycles_per_dot: usize,
     h_draw_cycles:  usize,
     h_total_cycles: usize,
+
+    interlace:      InterlaceState,
 }
 
 impl StateMachine {
@@ -84,6 +86,8 @@ impl StateMachine {
             cycles_per_dot: 0,
             h_draw_cycles:  0,
             h_total_cycles: 0,
+
+            interlace:      InterlaceState::Off,
         };
         machine.set_h_res_ntsc(256);
         machine
@@ -103,6 +107,15 @@ impl StateMachine {
             _ => panic!("invalid horizontal resolution specified!"),
         };
         self.h_draw_cycles = self.cycles_per_dot * self.h_res;
+    }
+
+    /// Set or unset interlace mode.
+    pub fn set_interlace(&mut self, interlace: bool) {
+        if interlace {
+            self.interlace = InterlaceState::Even;
+        } else {
+            self.interlace = InterlaceState::Off;
+        }
     }
 
     /// Advance the state machine.
@@ -155,8 +168,10 @@ impl StateMachine {
                         self.state = VBlank;
                         GPUClockRes::v_blank(dots)
                     } else {
+                        // Exit vblank
                         self.v_count = 0;
                         self.state = Drawing;
+                        self.toggle_interlace();
                         GPUClockRes::dots(dots)
                     }
                 } else {
@@ -164,6 +179,28 @@ impl StateMachine {
                 }
             }
         }
+    }
+
+    /// Get the interlace bit status.
+    pub fn get_interlace_bit(&self) -> bool {
+        use InterlaceState::*;
+        if self.v_count >= self.v_res {
+            return false;
+        }
+        match self.interlace {
+            Off => test_bit!(self.v_count, 0),
+            Even => false,
+            Odd => true,
+        }
+    }
+
+    fn toggle_interlace(&mut self) {
+        use InterlaceState::*;
+        self.interlace = match self.interlace {
+            Off => Off,
+            Even => Odd,
+            Odd => Even,
+        };
     }
 }
 
@@ -173,6 +210,13 @@ enum VideoState {
     HBlank,     // Horizontal blanking period.
     VBlank,     // Vertical blanking period.
     VHBlank,    // Horizontal blanking period during v-blank.
+}
+
+/// State of interlace.
+enum InterlaceState {
+    Off,    // Not drawing in interlace mode.
+    Even,
+    Odd,
 }
 
 /// Lines to draw per frame.

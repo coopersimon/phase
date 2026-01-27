@@ -7,7 +7,7 @@ use mips::mem::{Data, Mem32};
 use ram::RAM;
 use bios::BIOS;
 use control::MemControl;
-use dma::DMA;
+use dma::{DMA, END_CODE};
 pub use dma::DMADevice;
 
 use crate::PlayStationConfig;
@@ -60,6 +60,9 @@ impl MemBus {
     /// Clock internally, and set interrupt bits.
     fn do_clock(&mut self, cycles: usize) {
         let gpu_stat = self.gpu.clock(cycles);
+        if self.gpu.dma_command_ready() {
+            self.dma.gpu_command_req();
+        }
 
         let dma_irq = self.dma.check_irq();
 
@@ -88,8 +91,13 @@ impl MemBus {
             let cycles = if transfer.from_ram {
                 let data = self.main_ram.read_word(ram_addr);
                 let load_cycles = 1; // TODO...
-                let store_cycles = self.mut_dma_device(transfer.device).dma_write_word(data);
-                store_cycles + load_cycles
+                if transfer.list_data {
+                    self.dma.write_list_data(transfer.device, data);
+                    load_cycles
+                } else {
+                    let store_cycles = self.mut_dma_device(transfer.device).dma_write_word(data);
+                    store_cycles + load_cycles
+                }
             } else {
                 let Data { data, cycles: load_cycles } = self.mut_dma_device(transfer.device).dma_read_word();
                 self.main_ram.write_word(ram_addr, data);
@@ -202,14 +210,14 @@ impl MemBus {
         //println!("access I/O {:X}", addr);
         match addr {
             0x1F80_1000..=0x1F80_1023 => Some(&mut self.control),
-            0x1F80_1040..=0x1F80_105F => None, // Peripheral
+            //0x1F80_1040..=0x1F80_105F => None, // Peripheral
             0x1F80_1060..=0x1F80_1063 => Some(&mut self.control),
             0x1F80_1070..=0x1F80_1077 => Some(&mut self.interrupts),
             0x1F80_1080..=0x1F80_10FF => Some(&mut self.dma),
             0x1F80_1100..=0x1F80_1129 => Some(&mut self.timers),
             0x1F80_1800..=0x1F80_1807 => Some(&mut self.cdrom),
             0x1F80_1810..=0x1F80_1817 => Some(&mut self.gpu),
-            0x1F80_1820..=0x1F80_1827 => None, // MDEC
+            //0x1F80_1820..=0x1F80_1827 => None, // MDEC
             0x1F80_1C00..=0x1F80_1FFF => Some(&mut self.spu),
             _ => panic!("no such I/O device at {:X}", addr),
         }

@@ -34,6 +34,11 @@ impl ExpansionPort2 {
             boot_status: 0,
         }
     }
+
+    fn write_boot_status(&mut self, data: u8) {
+        self.boot_status = data;
+        println!("BOOT STAT {:X}", data);
+    }
 }
 
 impl MemInterface for ExpansionPort2 {
@@ -53,7 +58,7 @@ impl MemInterface for ExpansionPort2 {
     fn write_byte(&mut self, addr: u32, data: u8) {
         match addr {
             0x1F80_2040 => {},
-            0x1F80_2041 => self.boot_status = data,
+            0x1F80_2041 => self.write_boot_status(data),
             0x1F80_2042 => {},
             0x1F80_2043 => {},
             _ => panic!("invalid exp2 address!"),
