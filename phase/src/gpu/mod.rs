@@ -124,7 +124,7 @@ impl GPU {
     }
 
     fn send_gp1_command(&mut self, data: u32) {
-        println!("GP1 command: {:X}", data);
+        //println!("GP1 command: {:X}", data);
         let command = (data >> 24) as u8;
         match command {
             0x00 => self.reset(),
@@ -214,13 +214,7 @@ impl GPU {
         display_status.insert(GPUStatus::from_bits_truncate((param & 0x3F) << 17));
         display_status.insert(GPUStatus::from_bits_truncate((param & 0x40) << 10)); // HRes low bit
         display_status.insert(GPUStatus::from_bits_truncate((param & 0x80) << 7)); // Reverseflag
-        let h_res = match (display_status & GPUStatus::XResolution).bits() >> 16 {
-            0b000 => 256,
-            0b010 => 320,
-            0b100 => 512,
-            0b110 => 640,
-            _ => 368,
-        };
+        let h_res = display_status.h_res();
         if display_status.contains(GPUStatus::PALMode) {
             panic!("PAL mode unsupported!");
         } else {

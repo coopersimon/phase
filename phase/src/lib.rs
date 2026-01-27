@@ -47,8 +47,9 @@ impl PlayStation {
     /// 
     /// This should be called at 60fps for NTSC,
     /// and 50fps for PAL.
-    pub fn frame(&mut self, input: &Input, frame: &mut Frame) {
-        self.io.get_frame(input, frame);
+    pub fn frame(&mut self, frame: &mut Frame) {
+        let input = Input::empty(); // TODO!
+        self.io.get_frame(&input, frame);
     }
 
     /// Make a debugger for stepping through instructions.
@@ -69,7 +70,14 @@ impl Frame {
     pub fn new() -> Self {
         Self {
             frame_buffer: Vec::new(),
-            size: (0, 0)
+            size: (0, 0),
+        }
+    }
+
+    pub fn resize(&mut self, size: (usize, usize)) {
+        if size.0 != self.size.0 || size.1 != self.size.1 {
+            self.size = size;
+            self.frame_buffer.resize(size.0 * size.1 * 4, 0);
         }
     }
 }

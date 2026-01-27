@@ -62,6 +62,7 @@ impl Renderer {
         let init_status = GPUStatus::CommandReady | GPUStatus::DMARecvReady;
         status.store(init_status.bits(), Ordering::Release);
         let renderer = Box::new(SoftwareRenderer::new());
+        frame.lock().unwrap().resize((320, 240));
         Self {
             command_rx,
             frame_tx,
@@ -125,6 +126,7 @@ impl Renderer {
         self.status.remove(GPUStatus::DispModeFlags);
         self.status.insert(disp_mode_stat);
         self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.frame.lock().unwrap().resize((self.status.h_res(), self.status.v_res()));
     }
 
     fn tex_disable(&mut self, disable: bool) {
@@ -136,7 +138,7 @@ impl Renderer {
 // GP0.
 impl Renderer {
     fn exec_gp0_command(&mut self, data: u32) {
-        println!("GP0 command: {:X}", data);
+        //println!("GP0 command: {:X}", data);
         let command = (data >> 24) as u8;
         match command {
             
@@ -188,6 +190,27 @@ bitflags::bitflags! {
         const DrawModeFlags = bits![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15];
 
         const CommandTransferReady = bits![28, 30];
+    }
+}
+
+impl GPUStatus {
+    pub fn h_res(&self) -> usize {
+        match (*self & GPUStatus::XResolution).bits() >> 16 {
+            0b000 => 256,
+            0b010 => 320,
+            0b100 => 512,
+            0b110 => 640,
+            _ => 368,
+        }
+    }
+
+    pub fn v_res(&self) -> usize {
+        let interlace_bits = GPUStatus::YResolution | GPUStatus::Interlace;
+        if self.contains(interlace_bits) {
+            480
+        } else {
+            240
+        }
     }
 }
 
