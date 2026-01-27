@@ -2,17 +2,18 @@ mod videostate;
 mod renderer;
 
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicU32, Ordering}
 };
 
 use mips::mem::Data;
 
 use crossbeam_channel::{
-    bounded, Sender, Receiver
+    Receiver, Sender, bounded, unbounded
 };
 
 use crate::{
+    Frame,
     mem::DMADevice,
     utils::{bits::*, interface::MemInterface}
 };
@@ -29,16 +30,18 @@ pub struct GPU {
     read_reg: u32,
 
     renderer_tx: Sender<RendererCmd>,
+    frame_rx: Receiver<()>,
 }
 
 impl GPU {
-    pub fn new() -> Self {
-        let (tx, rx) = bounded(32); // TODO: should this even be bounded..?
+    pub fn new(frame: Arc<Mutex<Frame>>) -> Self {
+        let (renderer_tx, renderer_rx) = bounded(32); // TODO: should this even be bounded..?
         let status = Arc::new(AtomicU32::new(0));
         let thread_status = status.clone();
+        let (frame_tx, frame_rx) = unbounded();
         // Start render thread.
         std::thread::spawn(|| {
-            let mut renderer = Renderer::new(rx, thread_status);
+            let mut renderer = Renderer::new(renderer_rx, frame_tx, thread_status, frame);
             renderer.run();
         });
         Self {
@@ -47,7 +50,8 @@ impl GPU {
             status: status,
             read_reg: 0,
 
-            renderer_tx: tx,
+            renderer_tx,
+            frame_rx,
         }
     }
 
@@ -67,6 +71,14 @@ impl GPU {
     pub fn dma_command_ready(&self) -> bool {
         let mask = (GPUStatus::DMAMode | GPUStatus::DMARecvReady).bits();
         (self.status.load(Ordering::Acquire) & mask) == GPUStatus::CommandTransferReady.bits()
+    }
+
+    /// This extracts a frame from the renderer. It needs to communicate across a thread.
+    /// It should be called at the _start_ of each frame.
+    pub fn get_frame(&mut self) {
+        if self.renderer_tx.send(RendererCmd::GetFrame).is_ok() {
+            let _ = self.frame_rx.recv();
+        }
     }
 }
 

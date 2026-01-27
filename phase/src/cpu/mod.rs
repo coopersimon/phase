@@ -3,7 +3,7 @@ mod internalmem;
 
 use mips::{coproc::EmptyCoproc, cpu::{MIPSCore, MIPSICore, mips1::{MIPSI, MIPSIInstruction}}, mem::{Data, Mem32}};
 use internalmem::InternalMem;
-use crate::gte::GTE;
+use crate::{gte::GTE, io::BusIO};
 use crate::PlayStationConfig;
 
 type MIPSCPU = MIPSI<InternalMem, EmptyCoproc, GTE, EmptyCoproc>;
@@ -15,8 +15,8 @@ pub struct CPU {
 }
 
 impl CPU {
-    pub fn new(config: &PlayStationConfig) -> Self {
-        let mem = Box::new(InternalMem::new(config));
+    pub fn new(config: &PlayStationConfig, io: BusIO) -> Self {
+        let mem = Box::new(InternalMem::new(config, io));
         let mut core = MIPSCPU::with_memory(mem)
             .add_coproc2(GTE::new())
             .build();
@@ -26,16 +26,12 @@ impl CPU {
         }
     }
 
-    /// Step a single frame.
+    /// Run the CPU. This will block until the end,
+    /// so it should be called on its own thread.
     /// 
-    /// This will do a frame's worth of processing and return an image.
-    /// It is the external application's responsibility to manage real-world timing.
-    /// 
-    /// It will also send a frame's worth of audio data along the audio channel.
-    pub fn frame(&mut self) {
-        let mut cycle_count = 0;
-        const CYCLE_MAX: usize = 263 * 3413; // TODO: improve timing...
-        while cycle_count < CYCLE_MAX {
+    /// The IO object is used for communication and sync.
+    pub fn run(mut self) {
+        loop {
             self.core.step();
         }
     }

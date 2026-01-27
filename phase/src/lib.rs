@@ -8,6 +8,7 @@ mod expansion;
 mod spu;
 mod gpu;
 mod utils;
+mod io;
 
 use std::path::PathBuf;
 
@@ -20,23 +21,41 @@ pub struct PlayStationConfig {
 
 /// A PlayStation console.
 pub struct PlayStation {
-    cpu: cpu::CPU
+    cpu: Option<cpu::CPU>,
+    io: io::IO,
 }
 
 impl PlayStation {
-    pub fn new(config: &PlayStationConfig) -> Self {
-        let cpu = cpu::CPU::new(config);
+    pub fn new(config: PlayStationConfig) -> Self {
+        let (io, bus_io) = io::IO::new();
+        let cpu = cpu::CPU::new(&config, bus_io);
         Self {
-            cpu
+            cpu: Some(cpu),
+            io
         }
     }
 
-    pub fn frame(&mut self, frame: &mut Frame) {
-        // TODO.
+    /// Start running the CPU on its own thread.
+    pub fn run_cpu(&mut self) {
+        let cpu = std::mem::take(&mut self.cpu).expect("CPU thread already running!");
+        let _cpu_thread = std::thread::spawn(move || {
+            cpu.run();
+        });
     }
 
+    /// Drives the emulator and returns a frame.
+    /// 
+    /// This should be called at 60fps for NTSC,
+    /// and 50fps for PAL.
+    pub fn frame(&mut self, input: &Input, frame: &mut Frame) {
+        self.io.get_frame(input, frame);
+    }
+
+    /// Make a debugger for stepping through instructions.
+    /// 
+    /// Warning: this will panic if the CPU thread has begun.
     pub fn make_debugger(self) -> PSDebugger {
-        PSDebugger::new(self.cpu)
+        PSDebugger::new(self.cpu.expect("CPU thread running!"))
     }
 }
 
@@ -44,4 +63,27 @@ impl PlayStation {
 pub struct Frame {
     pub frame_buffer: Vec<u8>,
     pub size: (usize, usize)
+}
+
+impl Frame {
+    pub fn new() -> Self {
+        Self {
+            frame_buffer: Vec::new(),
+            size: (0, 0)
+        }
+    }
+}
+
+/// Input data.
+#[derive(Clone)]
+pub struct Input {
+    // TODO: controllers..?
+}
+
+impl Input {
+    pub fn empty() -> Self {
+        Self {
+
+        }
+    }
 }

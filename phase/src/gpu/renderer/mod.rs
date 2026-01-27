@@ -1,6 +1,7 @@
+mod software;
 
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{Ordering, AtomicU32}
 };
 
@@ -9,9 +10,12 @@ use crossbeam_channel::{
 };
 
 use crate::{
+    Frame,
     mem::ram::RAM,
     utils::bits::*
 };
+
+use software::SoftwareRenderer;
 
 const VRAM_SIZE: usize = 1024 * 1024;
 
@@ -33,11 +37,6 @@ pub enum RendererCmd {
     TexDisable(bool),
 }
 
-pub enum GP1Command {
-    DisplayEnable,
-
-}
-
 /// GPU renderer.
 /// 
 /// This lives on a different thread.
@@ -47,23 +46,32 @@ pub enum GP1Command {
 pub struct Renderer {
     // Comms
     command_rx: Receiver<RendererCmd>,
+    frame_tx: Sender<()>,
     atomic_status: Arc<AtomicU32>,
 
     // Internal state
     vram: RAM,
     status: GPUStatus,
+    frame: Arc<Mutex<Frame>>,
+
+    renderer: Box<dyn RendererImpl>,
 }
 
 impl Renderer {
-    pub fn new(command_rx: Receiver<RendererCmd>, status: Arc<AtomicU32>) -> Self {
+    pub fn new(command_rx: Receiver<RendererCmd>, frame_tx: Sender<()>, status: Arc<AtomicU32>, frame: Arc<Mutex<Frame>>) -> Self {
         let init_status = GPUStatus::CommandReady | GPUStatus::DMARecvReady;
         status.store(init_status.bits(), Ordering::Release);
+        let renderer = Box::new(SoftwareRenderer::new());
         Self {
             command_rx,
+            frame_tx,
             atomic_status: status,
 
             vram: RAM::new(VRAM_SIZE),
             status: init_status,
+            frame,
+
+            renderer,
         }
     }
 
@@ -85,7 +93,8 @@ impl Renderer {
     }
 
     fn send_frame(&mut self) {
-
+        // TODO: assemble frame
+        let _ = self.frame_tx.send(());
     }
 }
 
@@ -180,4 +189,10 @@ bitflags::bitflags! {
 
         const CommandTransferReady = bits![28, 30];
     }
+}
+
+/// The code responsible for doing actual drawing
+/// should implement this trait.
+trait RendererImpl {
+    
 }

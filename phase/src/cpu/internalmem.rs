@@ -1,9 +1,7 @@
 use mips::{coproc::Coprocessor0, mem::{Data, Mem32}};
 
 use crate::{
-    PlayStationConfig,
-    cpu::cop0::SystemCoproc,
-    mem::{MemBus, ram::RAM}
+    PlayStationConfig, cpu::cop0::SystemCoproc, io::BusIO, mem::{MemBus, ram::RAM}
 };
 
 const I_CACHE_SIZE: u32 = 4 * 1024;
@@ -21,10 +19,10 @@ pub struct InternalMem {
 }
 
 impl InternalMem {
-    pub fn new(config: &PlayStationConfig) -> Self {
+    pub fn new(config: &PlayStationConfig, io: BusIO) -> Self {
         Self {
             system_coproc:  SystemCoproc::new(),
-            mem_bus:        MemBus::new(config),
+            mem_bus:        MemBus::new(config, io),
             i_cache:        RAM::new(I_CACHE_SIZE as usize),
             cache_control:  0,
         }

@@ -11,6 +11,7 @@ pub struct GPUClockRes {
     pub in_v_blank: bool,
     pub in_h_blank: bool,
     pub dots: usize,
+    pub new_frame: bool,
 }
 
 impl GPUClockRes {
@@ -19,7 +20,8 @@ impl GPUClockRes {
             irq: Interrupt::empty(),
             in_v_blank: false,
             in_h_blank: false,
-            dots
+            dots,
+            new_frame: false,
         }
     }
     fn enter_v_blank(dots: usize) -> Self {
@@ -27,7 +29,8 @@ impl GPUClockRes {
             irq: Interrupt::VBLANK,
             in_v_blank: true,
             in_h_blank: false,
-            dots
+            dots,
+            new_frame: false,
         }
     }
     fn v_blank(dots: usize) -> Self {
@@ -35,7 +38,8 @@ impl GPUClockRes {
             irq: Interrupt::empty(),
             in_v_blank: true,
             in_h_blank: false,
-            dots
+            dots,
+            new_frame: false,
         }
     }
     fn h_blank(dots: usize) -> Self {
@@ -43,7 +47,8 @@ impl GPUClockRes {
             irq: Interrupt::empty(),
             in_v_blank: false,
             in_h_blank: true,
-            dots
+            dots,
+            new_frame: false,
         }
     }
     fn vh_blank(dots: usize) -> Self {
@@ -51,7 +56,17 @@ impl GPUClockRes {
             irq: Interrupt::empty(),
             in_v_blank: true,
             in_h_blank: true,
-            dots
+            dots,
+            new_frame: false,
+        }
+    }
+    fn exit_v_blank(dots: usize) -> Self {
+        Self {
+            irq: Interrupt::empty(),
+            in_v_blank: false,
+            in_h_blank: false,
+            dots,
+            new_frame: true,
         }
     }
 }
@@ -172,7 +187,7 @@ impl StateMachine {
                         self.v_count = 0;
                         self.state = Drawing;
                         self.toggle_interlace();
-                        GPUClockRes::dots(dots)
+                        GPUClockRes::exit_v_blank(dots)
                     }
                 } else {
                     GPUClockRes::vh_blank(dots)

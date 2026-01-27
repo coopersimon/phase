@@ -24,7 +24,7 @@ fn main() {
     let config = PlayStationConfig {
         bios_path: PathBuf::from(args.bios)
     };
-    let playstation = PlayStation::new(&config);
+    let playstation = PlayStation::new(config);
 
     if args.debug {
         debug::debug_mode(playstation.make_debugger());
@@ -35,5 +35,5 @@ fn main() {
 
 /// Run playstation with visuals.
 fn run(mut playstation: PlayStation) {
-    // TODO...
+    playstation.run_cpu();
 }

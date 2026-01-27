@@ -12,6 +12,7 @@ pub use dma::DMADevice;
 
 use crate::PlayStationConfig;
 use crate::gpu::GPU;
+use crate::io::BusIO;
 use crate::spu::SPU;
 use crate::utils::interface::MemInterface;
 use crate::interrupt::InterruptControl;
@@ -34,10 +35,12 @@ pub struct MemBus {
 
     expansion_port_1: ExpansionPort1,
     expansion_port_2: ExpansionPort2,
+
+    io: BusIO,
 }
 
 impl MemBus {
-    pub fn new(config: &PlayStationConfig) -> Self {
+    pub fn new(config: &PlayStationConfig, io: BusIO) -> Self {
         let bios = BIOS::new(Some(&config.bios_path)).expect("error loading BIOS"); // TODO: handle error.
         Self {
             control: MemControl::new(),
@@ -50,15 +53,20 @@ impl MemBus {
             dma:    DMA::new(),
             cdrom:  CDROM::new(),
             spu:    SPU::new(),
-            gpu:    GPU::new(),
+            gpu:    GPU::new(io.clone_frame_arc()),
 
             expansion_port_1: ExpansionPort1::new(),
             expansion_port_2: ExpansionPort2::new(),
+
+            io: io,
         }
     }
 
     /// Clock internally, and set interrupt bits.
-    fn do_clock(&mut self, cycles: usize) {
+    /// 
+    /// Returns false if a frame is about to begin,
+    /// and therefore we are syncing with the real world.
+    fn do_clock(&mut self, cycles: usize) -> bool {
         let gpu_stat = self.gpu.clock(cycles);
         if self.gpu.dma_command_ready() {
             self.dma.gpu_command_req();
@@ -79,6 +87,7 @@ impl MemBus {
             cd_irq |
             spu_irq
         );
+        gpu_stat.new_frame
     }
 
     /// Do DMA transfers, if any are ready.
@@ -104,8 +113,18 @@ impl MemBus {
                 let store_cycles = 1; // TODO...
                 store_cycles + load_cycles
             };
-            self.do_clock(cycles);
+            if self.do_clock(cycles) {
+                self.begin_frame();
+            }
         }
+    }
+
+    /// Upon frame completion, send a frame to the outside world.
+    fn begin_frame(&mut self) {
+        // Sync up with the GPU.
+        self.gpu.get_frame();
+        let _input = self.io.send_frame();
+        // TODO: write input...
     }
 }
 
@@ -114,7 +133,9 @@ impl Mem32 for MemBus {
     const LITTLE_ENDIAN: bool = true;
 
     fn clock(&mut self, cycles: usize) -> u8 {
-        self.do_clock(cycles);
+        if self.do_clock(cycles) {
+            self.begin_frame();
+        }
 
         self.do_dma();
 
