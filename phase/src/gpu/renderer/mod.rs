@@ -704,8 +704,7 @@ impl Color {
 }
 
 struct Vertex {
-    x: i16,
-    y: i16,
+    coord: Coord,
     col: Color,
     tex_s: u8,
     tex_t: u8,
@@ -715,8 +714,7 @@ impl Vertex {
     #[inline(always)]
     fn from_xy(xy: u32) -> Self {
         Self {
-            x: (xy & 0xFFFF) as i16,
-            y: ((xy >> 16) & 0xFFFF) as i16,
+            coord: Coord::from_xy(xy),
             col: Color::white(),
             tex_s: 0,
             tex_t: 0,
