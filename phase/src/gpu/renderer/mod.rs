@@ -10,9 +10,7 @@ use crossbeam_channel::{
 };
 
 use crate::{
-    Frame,
-    mem::ram::RAM,
-    utils::bits::*
+    Frame, gpu::InterlaceState, utils::bits::*
 };
 
 use software::SoftwareRenderer;
@@ -26,13 +24,15 @@ pub enum RendererCmd {
     GP0(u32),
     /// A new frame has begun, and we want to capture
     /// the frame buffer.
-    GetFrame,
+    GetFrame(InterlaceState),
 
     // GP1 commands:
     AcknowledgeIRQ,
     DisplayEnable(bool),
     DataRequest(GPUStatus),
     DisplayVRAMOffset(u32),
+    DisplayXRange(u32),
+    DisplayYRange(u32),
     DisplayMode(GPUStatus),
     TexDisable(bool),
 }
@@ -51,9 +51,9 @@ pub struct Renderer {
     atomic_status: Arc<AtomicU32>,
 
     // Internal state
-    vram: RAM,
     status: GPUStatus,
     frame: Arc<Mutex<Frame>>,
+    staging_buffer: Vec<u16>,
 
     renderer: Box<dyn RendererImpl>,
 }
@@ -70,9 +70,9 @@ impl Renderer {
             vram_tx,
             atomic_status: status,
 
-            vram: RAM::new(VRAM_SIZE),
             status: init_status,
             frame,
+            staging_buffer: Vec::new(),
 
             renderer,
         }
@@ -92,19 +92,24 @@ impl Renderer {
         use RendererCmd::*;
         match command {
             GP0(data)                   => return Some(data),
-            GetFrame                    => self.send_frame(),
+            GetFrame(interlace)         => self.send_frame(interlace),
             AcknowledgeIRQ              => self.acknowledge_irq(),
             DisplayEnable(enable)       => self.display_enable(enable),
             DataRequest(data_req_stat)  => self.data_request(data_req_stat),
             DisplayVRAMOffset(offset)   => self.display_vram_offset(offset),
+            DisplayXRange(range)        => self.display_range_x(range),
+            DisplayYRange(range)        => self.display_range_y(range),
             DisplayMode(disp_mode_stat) => self.display_mode(disp_mode_stat),
             TexDisable(disable)         => self.tex_disable(disable),
         }
         None
     }
 
-    fn send_frame(&mut self) {
-        // TODO: assemble frame
+    fn send_frame(&mut self, interlace_state: InterlaceState) {
+        {
+            let mut frame = self.frame.lock().unwrap();
+            self.renderer.get_frame(&mut frame, interlace_state);
+        }
         let _ = self.frame_tx.send(());
     }
 
@@ -129,6 +134,7 @@ impl Renderer {
     fn display_enable(&mut self, enable: bool) {
         self.status.set(GPUStatus::DisplayEnable, enable);
         self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.renderer.enable_display(enable);
     }
 
     fn data_request(&mut self, data_req_stat: GPUStatus) {
@@ -138,15 +144,33 @@ impl Renderer {
     }
 
     fn display_vram_offset(&mut self, offset: u32) {
-        let _x = offset & 0x3FF;
-        let _y = (offset >> 10) & 0x1FF;
+        let coord = Coord {
+            x: (offset & 0x3FF) as u16,
+            y: ((offset >> 10) & 0x1FF) as u16
+        };
+        self.renderer.set_display_offset(coord);
+    }
+
+    fn display_range_x(&mut self, range: u32) {
+        let begin = range & 0xFFF;
+        let end = (range >> 12) & 0xFFF;
+        self.renderer.set_display_range_x(begin, end);
+    }
+
+    fn display_range_y(&mut self, range: u32) {
+        let begin = range & 0x7FF;
+        let end = (range >> 10) & 0x7FF;
+        self.renderer.set_display_range_y(begin, end);
     }
 
     fn display_mode(&mut self, disp_mode_stat: GPUStatus) {
         self.status.remove(GPUStatus::DispModeFlags);
         self.status.insert(disp_mode_stat);
         self.atomic_status.store(self.status.bits(), Ordering::Release);
-        self.frame.lock().unwrap().resize((self.status.h_res(), self.status.v_res()));
+        let h_res = self.status.h_res();
+        let v_res = self.status.v_res();
+        self.frame.lock().unwrap().resize((h_res, v_res));
+        self.renderer.set_display_resolution(Size { width: h_res as u16, height: v_res as u16 });
     }
 
     fn tex_disable(&mut self, disable: bool) {
@@ -259,6 +283,12 @@ impl Renderer {
         let vertex_1 = self.get_parameter();
         let vertex_2 = self.get_parameter();
         let vertex_3 = self.get_parameter();
+        let vertices = [
+            Vertex::from_xy(vertex_1).set_col(rgb),
+            Vertex::from_xy(vertex_2).set_col(rgb),
+            Vertex::from_xy(vertex_3).set_col(rgb),
+        ];
+        self.renderer.draw_triangle(&vertices, transparent);
     }
 
     fn draw_textured_tri(&mut self, transparent: bool) {
@@ -304,6 +334,14 @@ impl Renderer {
         let vertex_2 = self.get_parameter();
         let vertex_3 = self.get_parameter();
         let vertex_4 = self.get_parameter();
+        let vertices = [
+            Vertex::from_xy(vertex_1).set_col(rgb),
+            Vertex::from_xy(vertex_2).set_col(rgb),
+            Vertex::from_xy(vertex_3).set_col(rgb),
+            Vertex::from_xy(vertex_4).set_col(rgb),
+        ];
+        self.renderer.draw_triangle(&vertices[0..3], transparent);
+        self.renderer.draw_triangle(&vertices[1..4], transparent);
     }
 
     fn draw_textured_quad(&mut self, transparent: bool) {
@@ -413,36 +451,35 @@ impl Renderer {
         let source = self.get_parameter();
         let dest = self.get_parameter();
         let size = self.get_parameter();
+        self.renderer.copy_vram_block(Coord::from_xy(source), Coord::from_xy(dest), Size::from_xy(size));
     }
 
     fn blit_cpu_to_vram(&mut self) {
-        let dest = self.get_parameter();
-        let x = dest & 0xFFFF;
-        let y = (dest >> 16) & 0xFFFF;
-        let size = self.get_parameter();
-        let width = size & 0xFFFF;
-        let height = (size >> 16) & 0xFFFF;
-        // Each pixel is 2 bytes.
-        let data_words = (width * height + 1) / 2;
-        for i in 0..data_words {
+        let dest = Coord::from_xy(self.get_parameter());
+        let size = Size::from_xy(self.get_parameter());
+        let data_words = size.word_count();
+        self.staging_buffer.clear();
+        for _ in 0..data_words {
             let data = self.get_parameter();
-            // TODO: write to VRAM.
+            self.staging_buffer.push((data & 0xFFFF) as u16);
+            self.staging_buffer.push(((data >> 16) & 0xFFFF) as u16);
         }
+        self.renderer.write_vram_block(&self.staging_buffer, dest, size);
     }
 
     fn blit_vram_to_cpu(&mut self) {
-        let source = self.get_parameter();
-        let x = source & 0xFFFF;
-        let y = (source >> 16) & 0xFFFF;
-        let size = self.get_parameter();
-        let width = size & 0xFFFF;
-        let height = (size >> 16) & 0xFFFF;
-        // Each pixel is 2 bytes.
-        let data_words = (width * height + 1) / 2;
+        let source = Coord::from_xy(self.get_parameter());
+        let size = Size::from_xy(self.get_parameter());
+        let data_words = size.word_count() as usize;
+        self.staging_buffer.resize(data_words * 2, 0);
+        self.renderer.read_vram_block(&mut self.staging_buffer, source, size);
         // Send.
         for i in 0..data_words {
-            // TODO: construct data.
-            let _ = self.vram_tx.send(0);
+            let idx = i * 2;
+            let data_lo = self.staging_buffer[idx] as u32;
+            let data_hi = self.staging_buffer[idx + 1] as u32;
+            let data = (data_hi << 16) | data_lo;
+            let _ = self.vram_tx.send(data);
         }
     }
 
@@ -461,26 +498,41 @@ impl Renderer {
         self.atomic_status.store(self.status.bits(), Ordering::Release);
 
         // TODO: x-flip and y-flip
+
+        // TODO: inform renderer.
     }
 
     fn texture_window_setting(&mut self, param: u32) {
-
+        // TODO.
     }
 
     fn set_draw_area_top_left(&mut self, param: u32) {
-        
+        let left = (param & 0x3FF) as u16;
+        let top = ((param >> 10) & 0x1FF) as u16;
+        self.renderer.set_draw_area_top_left(left, top);
     }
 
     fn set_draw_area_bottom_right(&mut self, param: u32) {
-        
+        let right = (param & 0x3FF) as u16;
+        let bottom = ((param >> 10) & 0x1FF) as u16;
+        self.renderer.set_draw_area_bottom_right(right, bottom);
     }
 
     fn set_draw_offset(&mut self, param: u32) {
-        
+        let x = (param & 0x7FF) as i16;
+        let y = ((param >> 10) & 0x7FF) as i16;
+        let signed_x = (x << 5) >> 5;
+        let signed_y = (y << 5) >> 5;
+        self.renderer.set_draw_area_offset(signed_x, signed_y);
     }
 
     fn mask_bit_setting(&mut self, param: u32) {
-        
+        let set_mask_bit = test_bit!(param, 0);
+        let check_mask_bit = test_bit!(param, 1);
+        self.status.set(GPUStatus::SetDrawMask, set_mask_bit);
+        self.status.set(GPUStatus::MaskDrawing, check_mask_bit);
+        self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.renderer.set_mask_settings(set_mask_bit, check_mask_bit);
     }
 }
 
@@ -544,5 +596,148 @@ impl GPUStatus {
 /// The code responsible for doing actual drawing
 /// should implement this trait.
 trait RendererImpl {
-    
+    /// The frame provided should be of the correct resolution.
+    /// It is of format BGRA U8.
+    fn get_frame(&mut self, frame: &mut Frame, interlace: InterlaceState);
+
+    fn write_vram_block(&mut self, data_in: &[u16], to: Coord, size: Size);
+    fn read_vram_block(&mut self, data_out: &mut [u16], from: Coord, size: Size);
+    fn copy_vram_block(&mut self, from: Coord, to: Coord, size: Size);
+
+    fn enable_display(&mut self, enable: bool);
+    fn set_display_offset(&mut self, offset: Coord);
+    fn set_display_range_x(&mut self, begin: u32, end: u32);
+    fn set_display_range_y(&mut self, begin: u32, end: u32);
+    fn set_display_resolution(&mut self, res: Size);
+
+    fn set_draw_area_top_left(&mut self, left: u16, top: u16);
+    fn set_draw_area_bottom_right(&mut self, right: u16, bottom: u16);
+    fn set_draw_area_offset(&mut self, x: i16, y: i16);
+    fn set_mask_settings(&mut self, set_mask_bit: bool, check_mask_bit: bool);
+
+    fn draw_triangle(&mut self, vertices: &[Vertex], transparent: bool);
+    //fn draw_triangle_tex(&mut self, vertices: &[Vertex], tex_info: TexInfo, transparent: bool);
+}
+
+struct Coord {
+    x: u16,
+    y: u16,
+}
+
+impl Coord {
+    #[inline(always)]
+    fn from_xy(xy: u32) -> Self {
+        Self {
+            x: (xy & 0xFFFF) as u16,
+            y: ((xy >> 16) & 0xFFFF) as u16,
+        }
+    }
+
+    /// Get byte index into VRAM.
+    fn get_vram_idx(&self) -> usize {
+        (self.x as usize) * 2 + (self.y as usize) * 2048
+    }
+}
+
+struct Size {
+    width: u16,
+    height: u16,
+}
+
+impl Size {
+    #[inline(always)]
+    fn from_xy(xy: u32) -> Self {
+        Self {
+            width: (xy & 0xFFFF) as u16,
+            height: ((xy >> 16) & 0xFFFF) as u16,
+        }
+    }
+
+    /// Get number of 32-bit words needed to hold this data.
+    /// Each pixel is 2 bytes.
+    #[inline(always)]
+    fn word_count(&self) -> u32 {
+        ((self.width as u32) * (self.height as u32) + 1) / 2
+    }
+}
+
+struct Color {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+impl Color {
+    fn white() -> Self {
+        Self {
+            r: 0xFF,
+            g: 0xFF,
+            b: 0xFF,
+        }
+    }
+
+    fn from_rgb15(rgb: u16) -> Self {
+        let r = (rgb & 0x1F) as u8;
+        let g = ((rgb >> 5) & 0x1F) as u8;
+        let b = ((rgb >> 10) & 0x1F) as u8;
+        Self {
+            r: (r << 3) | (r >> 2),
+            g: (g << 3) | (g >> 2),
+            b: (b << 3) | (b >> 2),
+        }
+    }
+
+    fn from_rgb24(rgb: u32) -> Self {
+        Self {
+            r: (rgb & 0xFF) as u8,
+            g: ((rgb >> 8) & 0xFF) as u8,
+            b: ((rgb >> 16) & 0xFF) as u8,
+        }
+    }
+
+    fn to_rgb15(&self) -> u16 {
+        let r = (self.r >> 3) as u16;
+        let g = (self.g >> 3) as u16;
+        let b = (self.b >> 3) as u16;
+        r | (g << 5) | (b << 10)
+    }
+}
+
+struct Vertex {
+    x: i16,
+    y: i16,
+    col: Color,
+    tex_s: u8,
+    tex_t: u8,
+}
+
+impl Vertex {
+    #[inline(always)]
+    fn from_xy(xy: u32) -> Self {
+        Self {
+            x: (xy & 0xFFFF) as i16,
+            y: ((xy >> 16) & 0xFFFF) as i16,
+            col: Color::white(),
+            tex_s: 0,
+            tex_t: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn set_col(mut self, rgb: u32) -> Self {
+        self.col = Color::from_rgb24(rgb);
+        self
+    }
+
+    #[inline(always)]
+    fn set_tex(mut self, tex: u32) -> Self {
+        self.tex_s = (tex & 0xFF) as u8;
+        self.tex_t = ((tex >> 8) & 0xFF) as u8;
+        self
+    }
+}
+
+struct TexInfo {
+    palette: u16,
+    page: u16,
 }

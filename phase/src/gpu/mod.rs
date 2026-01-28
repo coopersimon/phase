@@ -78,7 +78,8 @@ impl GPU {
     /// This extracts a frame from the renderer. It needs to communicate across a thread.
     /// It should be called at the _start_ of each frame.
     pub fn get_frame(&mut self) {
-        if self.renderer_tx.send(RendererCmd::GetFrame).is_ok() {
+        let interlace_state = self.state.get_interlace_state();
+        if self.renderer_tx.send(RendererCmd::GetFrame(interlace_state)).is_ok() {
             let _ = self.frame_rx.recv();
         }
     }
@@ -212,15 +213,11 @@ impl GPU {
     }
 
     fn display_range_x(&mut self, param: u32) {
-        // TODO: send to video state.
-        let _x_left = param & 0xFFF;
-        let _x_right = (param >> 12) & 0xFFF;
+        let _ = self.renderer_tx.send(RendererCmd::DisplayXRange(param));
     }
 
     fn display_range_y(&mut self, param: u32) {
-        // TODO: send to video state
-        let _y_top = param & 0x3FF;
-        let _y_bottom = (param >> 10) & 0x3FF;
+        let _ = self.renderer_tx.send(RendererCmd::DisplayYRange(param));
     }
 
     fn display_mode(&mut self, param: u32) {
@@ -251,5 +248,24 @@ impl GPU {
     fn tex_disable(&mut self, param: u32) {
         let disable = test_bit!(param, 0);
         let _ = self.renderer_tx.send(RendererCmd::TexDisable(disable));
+    }
+}
+
+/// State of interlace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InterlaceState {
+    Off,    // Not drawing in interlace mode.
+    Even,
+    Odd,
+}
+
+impl InterlaceState {
+    pub fn toggle(self) -> Self {
+        use InterlaceState::*;
+        match self {
+            Off => Off,
+            Even => Odd,
+            Odd => Even,
+        }
     }
 }

@@ -1,6 +1,7 @@
 // This file manages timing of the video system.
 
 use crate::{interrupt::Interrupt, utils::bits::*};
+use super::InterlaceState;
 
 /// Returned when clocking the GPU.
 /// 
@@ -127,7 +128,9 @@ impl StateMachine {
     /// Set or unset interlace mode.
     pub fn set_interlace(&mut self, interlace: bool) {
         if interlace {
-            self.interlace = InterlaceState::Even;
+            if self.interlace == InterlaceState::Off {
+                self.interlace = InterlaceState::Odd;
+            }
         } else {
             self.interlace = InterlaceState::Off;
         }
@@ -187,6 +190,7 @@ impl StateMachine {
                         self.v_count = 0;
                         self.state = Drawing;
                         self.toggle_interlace();
+                        println!("interlace mode: {:?}", self.interlace);
                         GPUClockRes::exit_v_blank(dots)
                     }
                 } else {
@@ -209,13 +213,12 @@ impl StateMachine {
         }
     }
 
+    pub fn get_interlace_state(&self) -> InterlaceState {
+        self.interlace
+    }
+
     fn toggle_interlace(&mut self) {
-        use InterlaceState::*;
-        self.interlace = match self.interlace {
-            Off => Off,
-            Even => Odd,
-            Odd => Even,
-        };
+        self.interlace = self.interlace.toggle();
     }
 }
 
@@ -225,13 +228,6 @@ enum VideoState {
     HBlank,     // Horizontal blanking period.
     VBlank,     // Vertical blanking period.
     VHBlank,    // Horizontal blanking period during v-blank.
-}
-
-/// State of interlace.
-enum InterlaceState {
-    Off,    // Not drawing in interlace mode.
-    Even,
-    Odd,
 }
 
 /// Lines to draw per frame.

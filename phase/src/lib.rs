@@ -78,6 +78,7 @@ impl Frame {
         if size.0 != self.size.0 || size.1 != self.size.1 {
             self.size = size;
             self.frame_buffer.resize(size.0 * size.1 * 4, 0);
+            self.frame_buffer.fill(0);
         }
     }
 }
