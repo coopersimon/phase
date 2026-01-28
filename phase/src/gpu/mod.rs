@@ -31,6 +31,7 @@ pub struct GPU {
 
     renderer_tx: Sender<RendererCmd>,
     frame_rx: Receiver<()>,
+    vram_rx: Receiver<u32>,
 }
 
 impl GPU {
@@ -39,9 +40,10 @@ impl GPU {
         let status = Arc::new(AtomicU32::new(0));
         let thread_status = status.clone();
         let (frame_tx, frame_rx) = unbounded();
+        let (vram_tx, vram_rx) = unbounded();
         // Start render thread.
         std::thread::spawn(|| {
-            let mut renderer = Renderer::new(renderer_rx, frame_tx, thread_status, frame);
+            let mut renderer = Renderer::new(renderer_rx, frame_tx, vram_tx, thread_status, frame);
             renderer.run();
         });
         Self {
@@ -52,6 +54,7 @@ impl GPU {
 
             renderer_tx,
             frame_rx,
+            vram_rx
         }
     }
 
@@ -66,11 +69,10 @@ impl GPU {
         res
     }
 
-    /// Check if the GPU is ready to transfer via DMA,
-    /// using a command list.
-    pub fn dma_command_ready(&self) -> bool {
+    /// Check if the GPU is ready to transfer via DMA.
+    pub fn dma_ready(&self) -> bool {
         let mask = (GPUStatus::DMAMode | GPUStatus::DMARecvReady).bits();
-        (self.status.load(Ordering::Acquire) & mask) == GPUStatus::CommandTransferReady.bits()
+        (self.status.load(Ordering::Acquire) & mask) == GPUStatus::TransferReady.bits()
     }
 
     /// This extracts a frame from the renderer. It needs to communicate across a thread.
@@ -102,17 +104,28 @@ impl MemInterface for GPU {
 
 impl DMADevice for GPU {
     fn dma_read_word(&mut self) -> Data<u32> {
-        // TODO.
-        Data { data: 0, cycles: 1 }
+        let status = self.status.load(Ordering::Acquire);
+        let dma_mode = (status & GPUStatus::DMAMode.bits()) >> 29;
+        let data = if dma_mode == 3 {
+            self.vram_rx.try_recv().unwrap_or_default()
+        } else {
+            println!("reading blank, current mode: {}", dma_mode);
+            0
+        };
+        Data { data, cycles: 1 }
     }
 
     fn dma_write_word(&mut self, data: u32) -> usize {
-        let dma_mode = (self.status.load(Ordering::Acquire) & GPUStatus::DMAMode.bits()) >> 29;
+        // TODO: properly track state?
+        /*let status = self.status.load(Ordering::Acquire);
+        let dma_mode = (status & GPUStatus::DMAMode.bits()) >> 29;
         if dma_mode == 2 {
             self.send_gp0_command(data);
         } else {
             // ???
-        }
+            println!("discarding, current mode: {}", dma_mode);
+        }*/
+        self.send_gp0_command(data);
         1
     }
 }
@@ -120,11 +133,12 @@ impl DMADevice for GPU {
 // Internal
 impl GPU {
     fn send_gp0_command(&mut self, data: u32) {
+        //println!("GP0 send: {:X}", data);
         let _ = self.renderer_tx.send(RendererCmd::GP0(data));
     }
 
     fn send_gp1_command(&mut self, data: u32) {
-        //println!("GP1 command: {:X}", data);
+        println!("GP1 command: {:X}", data);
         let command = (data >> 24) as u8;
         match command {
             0x00 => self.reset(),
@@ -147,16 +161,16 @@ impl GPU {
     }
 
     fn read_status(&self) -> u32 {
-        let status = self.status.load(Ordering::Acquire);
+        let mut status = self.status.load(Ordering::Acquire);
         if status & GPUStatus::Interlace.bits() != 0 {
             if self.state.get_interlace_bit() {
-                status | GPUStatus::InterlaceOdd.bits()
-            } else {
-                status
+                status |= GPUStatus::InterlaceOdd.bits();
             }
-        } else {
-            status
         }
+        if !self.vram_rx.is_empty() {
+            status |= GPUStatus::VRAMSendReady.bits();
+        }
+        status
     }
 }
 

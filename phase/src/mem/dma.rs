@@ -76,7 +76,9 @@ impl DMA {
         self.channels[2].start_sync_mode(DMA_REQ_MODE);
     }
 
-    pub fn gpu_command_req(&mut self) {
+    pub fn gpu_req(&mut self) {
+        // TODO: only one call here...
+        self.channels[2].start_sync_mode(DMA_REQ_MODE);
         self.channels[2].start_sync_mode(DMA_LIST_MODE);
     }
 
@@ -107,7 +109,7 @@ impl DMA {
                 addr:       channel.current_addr,
                 from_ram:   channel.control.contains(ChannelControl::TransferDir),
                 device:     chan_idx,
-                list_data:  channel.next_list_addr.is_none(),
+                list_data:  channel.get_mode() == DMA_LIST_MODE && channel.next_list_addr.is_none(),
             });
             if channel.control.contains(ChannelControl::DecAddr) {
                 channel.current_addr -= 4;
@@ -345,9 +347,14 @@ impl DMAChannel {
         if self.control.contains(ChannelControl::StartTrigger) {
             self.start_sync_mode(DMA_IMM_MODE);
         }
-        if self.control.contains(ChannelControl::StartBusy) && self.get_mode() != DMA_IMM_MODE {
+        let mode = self.get_mode();
+        if self.control.contains(ChannelControl::StartBusy) && mode != DMA_IMM_MODE {
             self.next_list_addr = None;
             self.current_addr = self.base_addr;
+            if mode == DMA_REQ_MODE {
+                self.current_word_count = self.block_control & 0xFFFF;
+                self.current_block_count = (self.block_control >> 16) & 0xFFFF;
+            }
         }
     }
 
@@ -359,7 +366,7 @@ impl DMAChannel {
                 self.active = true;
                 self.current_addr = self.base_addr;
                 self.current_word_count = self.block_control & 0xFFFF;
-                self.current_block_count = (self.block_control >> 16) & 0xFFFF;
+                self.current_block_count = 0;//(self.block_control >> 16) & 0xFFFF;
             } else if self.control.contains(ChannelControl::StartBusy) {
                 self.active = true;
             }
@@ -403,10 +410,11 @@ impl DMAChannel {
                 self.current_addr = next_addr;
                 false
             }
-        } else if self.current_block_count == 0 {
+        } else if self.current_block_count <= 1 {
             self.control.remove(ChannelControl::StartBusy);
             true
         } else {
+            self.current_word_count = self.block_control & 0xFFFF;
             self.current_block_count -= 1;
             false
         }

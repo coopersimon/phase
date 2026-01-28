@@ -5,7 +5,7 @@ use winit::{
     application::ApplicationHandler, dpi::{
         LogicalSize, Size, PhysicalSize
     }, event::{
-        ElementState, WindowEvent, MouseButton
+        ElementState, WindowEvent
     }, event_loop::{
         EventLoop
     }, window::Window, keyboard::{PhysicalKey, KeyCode}
