@@ -315,6 +315,12 @@ impl Renderer {
         let vertex_2 = self.get_parameter();
         let rgb_3 = self.get_parameter();
         let vertex_3 = self.get_parameter();
+        let vertices = [
+            Vertex::from_xy(vertex_1).set_col(rgb_1),
+            Vertex::from_xy(vertex_2).set_col(rgb_2),
+            Vertex::from_xy(vertex_3).set_col(rgb_3),
+        ];
+        self.renderer.draw_triangle(&vertices, transparent);
     }
 
     fn draw_textured_shaded_tri(&mut self, rgb_1: u32, transparent: bool) {
@@ -374,6 +380,14 @@ impl Renderer {
         let vertex_3 = self.get_parameter();
         let rgb_4 = self.get_parameter();
         let vertex_4 = self.get_parameter();
+        let vertices = [
+            Vertex::from_xy(vertex_1).set_col(rgb_1),
+            Vertex::from_xy(vertex_2).set_col(rgb_2),
+            Vertex::from_xy(vertex_3).set_col(rgb_3),
+            Vertex::from_xy(vertex_4).set_col(rgb_4),
+        ];
+        self.renderer.draw_triangle(&vertices[0..3], transparent);
+        self.renderer.draw_triangle(&vertices[1..4], transparent);
     }
 
     fn draw_textured_shaded_quad(&mut self, rgb_1: u32, transparent: bool) {

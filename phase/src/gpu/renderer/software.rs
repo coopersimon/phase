@@ -223,9 +223,17 @@ impl SoftwareRenderer {
                 if line.x < other_line.x {
                     right = Some(other_line);
                     left = Some(line);
-                } else {
+                } else if line.x > other_line.x {
                     left = Some(other_line);
                     right = Some(line);
+                } else { // equal
+                    if line.x_gradient < other_line.x_gradient {
+                        right = Some(other_line);
+                        left = Some(line);
+                    } else {
+                        left = Some(other_line);
+                        right = Some(line);
+                    }
                 }
             } else {
                 left = Some(line);
@@ -272,15 +280,15 @@ impl Line {
     }
 
     fn from_lines(left: &Line, right: &Line) -> Self {
-        let gradient = (1 << 16) / ((right.x - left.x) as i32);
+        let gradient = (1 << 16) / ((right.get_x() - left.get_x()) as i32);
         Self {
             x_gradient: 0,
             x: 0,
-            r_gradient: gradient * (right.r as i32 - left.r as i32),
+            r_gradient: gradient * ((right.r as i32 - left.r as i32) >> 16),
             r: left.r as i32,
-            g_gradient: gradient * (right.g as i32 - left.g as i32),
+            g_gradient: gradient * ((right.g as i32 - left.g as i32) >> 16),
             g: left.g as i32,
-            b_gradient: gradient * (right.b as i32 - left.b as i32),
+            b_gradient: gradient * ((right.b as i32 - left.b as i32) >> 16),
             b: left.b as i32,
         }
     }
