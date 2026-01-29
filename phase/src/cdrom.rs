@@ -269,6 +269,7 @@ impl CDROM {
             0x14 => self.get_td(),
             0x15 => self.seek_l(),
             0x16 => self.seek_p(),
+            0x19 => self.subfunction(),
             0x1A => self.get_id(),
             0x1B => self.read_s(),
             0x1D => self.get_q(),
@@ -614,6 +615,20 @@ impl CDROM {
             self.send_response(0x00, 5);
             self.send_response(0x00, 5);
             self.send_response(0x00, 5);
+        }
+        Ok(())
+    }
+
+    fn subfunction(&mut self) -> DriveResult<()> {
+        let op = self.read_parameter()?;
+        match op {
+            0x20 => { // CDROM BIOS
+                self.send_response(0x95, 3); // yy
+                self.send_response(0x05, 3); // mm
+                self.send_response(0x16, 3); // dd
+                self.send_response(0xC1, 3); // version
+            },
+            _ => panic!("unsupported CD subfunction {:X}", op),
         }
         Ok(())
     }

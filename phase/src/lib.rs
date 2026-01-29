@@ -7,6 +7,7 @@ mod cdrom;
 mod expansion;
 mod spu;
 mod gpu;
+mod peripheral;
 mod utils;
 mod io;
 

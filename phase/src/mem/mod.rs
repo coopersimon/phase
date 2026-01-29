@@ -7,7 +7,7 @@ use mips::mem::{Data, Mem32};
 use ram::RAM;
 use bios::BIOS;
 use control::MemControl;
-use dma::{DMA, END_CODE};
+use dma::DMA;
 pub use dma::DMADevice;
 
 use crate::PlayStationConfig;
@@ -19,6 +19,7 @@ use crate::interrupt::InterruptControl;
 use crate::timer::Timers;
 use crate::cdrom::CDROM;
 use crate::expansion::{ExpansionPort1, ExpansionPort2};
+use crate::peripheral::PeripheralPort;
 
 pub struct MemBus {
     control: MemControl,
@@ -32,6 +33,7 @@ pub struct MemBus {
     cdrom:  CDROM,
     spu:    SPU,
     gpu:    GPU,
+    peripheral: PeripheralPort,
 
     expansion_port_1: ExpansionPort1,
     expansion_port_2: ExpansionPort2,
@@ -54,6 +56,7 @@ impl MemBus {
             cdrom:  CDROM::new(),
             spu:    SPU::new(),
             gpu:    GPU::new(io.clone_frame_arc()),
+            peripheral: PeripheralPort::new(),
 
             expansion_port_1: ExpansionPort1::new(),
             expansion_port_2: ExpansionPort2::new(),
@@ -80,12 +83,15 @@ impl MemBus {
 
         let spu_irq = self.spu.clock(cycles);
 
+        let peripheral_irq = self.peripheral.clock(cycles);
+
         self.interrupts.trigger_irq(
             gpu_stat.irq |
             dma_irq |
             timer_irq |
             cd_irq |
-            spu_irq
+            spu_irq |
+            peripheral_irq
         );
         gpu_stat.new_frame
     }
@@ -231,7 +237,8 @@ impl MemBus {
         //println!("access I/O {:X}", addr);
         match addr {
             0x1F80_1000..=0x1F80_1023 => Some(&mut self.control),
-            //0x1F80_1040..=0x1F80_105F => None, // Peripheral
+            0x1F80_1040..=0x1F80_104F => Some(&mut self.peripheral),
+            //0x1F80_1050..=0x1F80_105F => None, // Serial
             0x1F80_1060..=0x1F80_1063 => Some(&mut self.control),
             0x1F80_1070..=0x1F80_1077 => Some(&mut self.interrupts),
             0x1F80_1080..=0x1F80_10FF => Some(&mut self.dma),
