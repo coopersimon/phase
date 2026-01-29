@@ -46,16 +46,18 @@ impl Timers {
                 interrupt |= Interrupt::Timer1;
             }
         }
-        self.clock_div += cycles;
         if self.timers[2].use_sys_clock() {
             if self.timers[2].clock(cycles) {
                 interrupt |= Interrupt::Timer2;
             }
-        } else if self.clock_div >= 8 { // Clock / 8.
-            if self.timers[2].clock(self.clock_div / 8) {
-                interrupt |= Interrupt::Timer2;
+        } else { // Clock / 8.
+            self.clock_div += cycles;
+            if self.clock_div >= 8 {
+                if self.timers[2].clock(self.clock_div / 8) {
+                    interrupt |= Interrupt::Timer2;
+                }
+                self.clock_div = self.clock_div % 8;
             }
-            self.clock_div = self.clock_div % 8;
         }
         interrupt
     }
@@ -85,36 +87,47 @@ impl Timers {
 
 impl MemInterface for Timers {
     fn read_word(&mut self, addr: u32) -> u32 {
-        match addr {
-            0x1F801100 => self.timers[0].counter as u32,
-            0x1F801104 => self.timers[0].read_mode(),
-            0x1F801108 => self.timers[0].target as u32,
-
-            0x1F801110 => self.timers[1].counter as u32,
-            0x1F801114 => self.timers[1].read_mode(),
-            0x1F801118 => self.timers[1].target as u32,
-
-            0x1F801120 => self.timers[2].counter as u32,
-            0x1F801124 => self.timers[2].read_mode(),
-            0x1F801128 => self.timers[2].target as u32,
-
-            _ => panic!("invalid timer addr {:X}", addr),
-        }
+        self.read_halfword(addr) as u32
     }
 
     fn write_word(&mut self, addr: u32, data: u32) {
+        self.write_halfword(addr, data as u16);
+    }
+
+    fn read_halfword(&mut self, addr: u32) -> u16 {
+        let data = match addr {
+            0x1F801100 => self.timers[0].counter,
+            0x1F801104 => self.timers[0].read_mode(),
+            0x1F801108 => self.timers[0].target,
+
+            0x1F801110 => self.timers[1].counter,
+            0x1F801114 => self.timers[1].read_mode(),
+            0x1F801118 => self.timers[1].target,
+
+            0x1F801120 => self.timers[2].counter,
+            0x1F801124 => self.timers[2].read_mode(),
+            0x1F801128 => self.timers[2].target,
+
+            _ => panic!("invalid timer addr {:X}", addr),
+        };
+        //println!("timer read {:X} from {:X}", data, addr);
+        data
+    }
+    
+    fn write_halfword(&mut self, addr: u32, data: u16) {
+        //println!("timer write {:X} to {:X}", data, addr);
         match addr {
             0x1F801100 => self.timers[0].counter = 0,
             0x1F801104 => self.timers[0].write_mode(data),
-            0x1F801108 => self.timers[0].target = data as u16,
+            0x1F801108 => self.timers[0].target = data,
 
             0x1F801110 => self.timers[1].counter = 0,
             0x1F801114 => self.timers[1].write_mode(data),
-            0x1F801118 => self.timers[1].target = data as u16,
+            0x1F801118 => self.timers[1].target = data,
 
             0x1F801120 => self.timers[2].counter = 0,
             0x1F801124 => self.timers[2].write_mode(data),
-            0x1F801128 => self.timers[2].target = data as u16,
+            0x1F801128 => self.timers[2].target = data,
 
             _ => panic!("invalid timer addr {:X}", addr),
         }
@@ -123,7 +136,7 @@ impl MemInterface for Timers {
 
 bitflags::bitflags! {
     #[derive(Clone, Copy)]
-    struct TimerMode: u32 {
+    struct TimerMode: u16 {
         const ReachedMax    = bit!(12);
         const ReachedTarget = bit!(11);
         const IRQReq        = bit!(10);
@@ -166,14 +179,14 @@ impl Timer {
         }
     }
 
-    fn write_mode(&mut self, mode: u32) {
+    fn write_mode(&mut self, mode: u16) {
         let mode_write = TimerMode::from_bits_truncate(mode);
         self.mode.remove(TimerMode::Writable);
         self.mode.insert(mode_write & TimerMode::Writable);
         if mode_write.contains(TimerMode::IRQReq) {
             self.irq_latch = false;
-            self.mode.insert(TimerMode::IRQReq);
         }
+        self.mode.insert(TimerMode::IRQReq);
         if mode_write.contains(TimerMode::SyncEnable) {
             if self.blank_timer {
                 match (self.mode & TimerMode::SyncMode).bits() >> 1 {
@@ -195,7 +208,7 @@ impl Timer {
         }
     }
 
-    fn read_mode(&mut self) -> u32 {
+    fn read_mode(&mut self) -> u16 {
         let mode = self.mode.bits();
         self.mode.remove(TimerMode::ReachedMax | TimerMode::ReachedTarget);
         mode
@@ -233,9 +246,9 @@ impl Timer {
     fn use_sys_clock(&self) -> bool {
         let src = (self.mode & TimerMode::ClockSrc).bits() >> 8;
         if self.blank_timer {
-            (src & 0b10) == 0
-        } else {
             (src & 0b1) == 0
+        } else {
+            (src & 0b10) == 0
         }
     }
 
@@ -245,6 +258,7 @@ impl Timer {
         }
         let prev_irq_req = self.mode.contains(TimerMode::IRQReq);
         let new_counter = (self.counter as usize) + cycles;
+        self.counter = new_counter as u16;
         if new_counter >= (self.target as usize) {
             if self.mode.contains(TimerMode::TargetIRQ) {
                 self.trigger_interrupt();
