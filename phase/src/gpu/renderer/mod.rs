@@ -304,7 +304,7 @@ impl Renderer {
             Vertex::from_xy(vertex_2).set_tex(texcoord_2),
             Vertex::from_xy(vertex_3).set_tex(texcoord_3),
         ];
-        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        let tex_info = TexInfo::from_data(texcoord_1, texcoord_2);
         self.renderer.draw_triangle_tex(&vertices, &tex_info, transparent);
     }
 
@@ -320,7 +320,7 @@ impl Renderer {
             Vertex::from_xy(vertex_2).set_col(rgb).set_tex(texcoord_2),
             Vertex::from_xy(vertex_3).set_col(rgb).set_tex(texcoord_3),
         ];
-        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        let tex_info = TexInfo::from_data(texcoord_1, texcoord_2);
         self.renderer.draw_triangle_tex(&vertices, &tex_info, transparent);
     }
 
@@ -352,7 +352,7 @@ impl Renderer {
             Vertex::from_xy(vertex_2).set_col(rgb_2).set_tex(texcoord_2),
             Vertex::from_xy(vertex_3).set_col(rgb_3).set_tex(texcoord_3),
         ];
-        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        let tex_info = TexInfo::from_data(texcoord_1, texcoord_2);
         self.renderer.draw_triangle_tex(&vertices, &tex_info, transparent);
     }
 
@@ -387,7 +387,7 @@ impl Renderer {
             Vertex::from_xy(vertex_3).set_tex(texcoord_3),
             Vertex::from_xy(vertex_4).set_tex(texcoord_4),
         ];
-        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        let tex_info = TexInfo::from_data(texcoord_1, texcoord_2);
         self.renderer.draw_triangle_tex(&vertices[0..3], &tex_info, transparent);
         self.renderer.draw_triangle_tex(&vertices[1..4], &tex_info, transparent);
     }
@@ -407,7 +407,7 @@ impl Renderer {
             Vertex::from_xy(vertex_3).set_col(rgb).set_tex(texcoord_3),
             Vertex::from_xy(vertex_4).set_col(rgb).set_tex(texcoord_4),
         ];
-        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        let tex_info = TexInfo::from_data(texcoord_1, texcoord_2);
         self.renderer.draw_triangle_tex(&vertices[0..3], &tex_info, transparent);
         self.renderer.draw_triangle_tex(&vertices[1..4], &tex_info, transparent);
     }
@@ -448,7 +448,7 @@ impl Renderer {
             Vertex::from_xy(vertex_3).set_col(rgb_3).set_tex(texcoord_3),
             Vertex::from_xy(vertex_4).set_col(rgb_4).set_tex(texcoord_4),
         ];
-        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        let tex_info = TexInfo::from_data(texcoord_1, texcoord_2);
         self.renderer.draw_triangle_tex(&vertices[0..3], &tex_info, transparent);
         self.renderer.draw_triangle_tex(&vertices[1..4], &tex_info, transparent);
     }
@@ -492,28 +492,39 @@ impl Renderer {
     }
 
     fn draw_rectangle(&mut self, rgb: u32, transparent: bool) {
-        let top_left = self.get_parameter();
-        let size = self.get_parameter();
-
-        unimplemented!("rect");
+        let top_left = Coord::from_xy(self.get_parameter());
+        let size = Size::from_xy(self.get_parameter());
+        let color = Color::from_rgb24(rgb);
+        self.renderer.draw_rectangle(color, top_left, size, transparent);
     }
 
-    fn draw_fixed_rectangle(&mut self, rgb: u32, transparent: bool, size: usize) {
-        let top_left = self.get_parameter();
-        unimplemented!("draw fixed rect");
+    fn draw_fixed_rectangle(&mut self, rgb: u32, transparent: bool, size: u16) {
+        let top_left = Coord::from_xy(self.get_parameter());
+        let size = Size { width: size, height: size };
+        let color = Color::from_rgb24(rgb);
+        self.renderer.draw_rectangle(color, top_left, size, transparent);
     }
 
     fn draw_tex_rectangle(&mut self, rgb: Option<u32>, transparent: bool) {
-        let top_left = self.get_parameter();
-        let tex_info = self.get_parameter();
-        let size = self.get_parameter();
-        unimplemented!("draw tex rect");
+        let top_left = Coord::from_xy(self.get_parameter());
+        let tex_data = self.get_parameter();
+        let size = Size::from_xy(self.get_parameter());
+        let palette = PaletteCoord::from_data(tex_data);
+        let tex_info = TexInfo::from_draw_mode(self.status.bits() as u16, palette);
+        let tex_coord = TexCoord::from_16(tex_data as u16);
+        let color = rgb.map(Color::from_rgb24).unwrap_or_default();
+        self.renderer.draw_rectangle_tex(color, tex_coord, &tex_info, top_left, size, transparent);
     }
 
-    fn draw_tex_fixed_rectangle(&mut self, rgb: Option<u32>, transparent: bool, size: usize) {
-        let top_left = self.get_parameter();
-        let tex_info = self.get_parameter();
-        unimplemented!("draw tex fixed rect");
+    fn draw_tex_fixed_rectangle(&mut self, rgb: Option<u32>, transparent: bool, size: u16) {
+        let top_left = Coord::from_xy(self.get_parameter());
+        let tex_data = self.get_parameter();
+        let size = Size { width: size, height: size };
+        let palette = PaletteCoord::from_data(tex_data);
+        let tex_info = TexInfo::from_draw_mode(self.status.bits() as u16, palette);
+        let tex_coord = TexCoord::from_16(tex_data as u16);
+        let color = rgb.map(Color::from_rgb24).unwrap_or_default();
+        self.renderer.draw_rectangle_tex(color, tex_coord, &tex_info, top_left, size, transparent);
     }
 
     // Data copy
@@ -694,6 +705,8 @@ trait RendererImpl {
     fn fill_rectangle(&mut self, color: Color, top_left: Coord, size: Size);
     fn draw_triangle(&mut self, vertices: &[Vertex], transparent: bool);
     fn draw_triangle_tex(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool);
+    fn draw_rectangle(&mut self, color: Color, top_left: Coord, size: Size, transparent: bool);
+    fn draw_rectangle_tex(&mut self, color: Color, tex_coord: TexCoord, tex_info: &TexInfo, top_left: Coord, size: Size, transparent: bool);
 }
 
 struct Coord {
@@ -738,21 +751,24 @@ impl Size {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Color {
     r: u8,
     g: u8,
     b: u8,
 }
 
-impl Color {
-    fn white() -> Self {
+impl Default for Color {
+    fn default() -> Self {
         Self {
-            r: 0xFF,
-            g: 0xFF,
-            b: 0xFF,
+            r: 0x80,
+            g: 0x80,
+            b: 0x80,
         }
     }
+}
 
+impl Color {
     fn from_rgb15(rgb: u16) -> Self {
         let r = (rgb & 0x1F) as u8;
         let g = ((rgb >> 5) & 0x1F) as u8;
@@ -788,11 +804,26 @@ impl Color {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TexCoord {
+    s: u8,
+    t: u8,
+}
+
+impl TexCoord {
+    #[inline(always)]
+    fn from_16(coords: u16) -> Self {
+        Self {
+            s: (coords & 0xFF) as u8,
+            t: ((coords >> 8) & 0xFF) as u8,
+        }
+    }
+}
+
 struct Vertex {
     coord: Coord,
     col: Color,
-    tex_s: u8,
-    tex_t: u8,
+    tex: TexCoord,
 }
 
 impl Vertex {
@@ -800,9 +831,8 @@ impl Vertex {
     fn from_xy(xy: u32) -> Self {
         Self {
             coord: Coord::from_xy(xy),
-            col: Color { r: 0x80, g: 0x80, b: 0x80 },
-            tex_s: 0,
-            tex_t: 0,
+            col: Color::default(),
+            tex: TexCoord { s: 0, t: 0 },
         }
     }
 
@@ -814,40 +844,60 @@ impl Vertex {
 
     #[inline(always)]
     fn set_tex(mut self, tex: u32) -> Self {
-        self.tex_s = (tex & 0xFF) as u8;
-        self.tex_t = ((tex >> 8) & 0xFF) as u8;
+        self.tex = TexCoord::from_16(tex as u16);
         self
     }
 }
 
+struct PaletteCoord {
+    x: usize,
+    y: usize,
+}
+
+impl PaletteCoord {
+    fn from_data(data: u32) -> Self {
+        let palette = (data >> 16) as usize;
+        Self {
+            x: (palette & 0x3F) * 16,
+            y: (palette >> 6) & 0x1FF,
+        }
+    }
+}
+
 struct TexInfo {
-    s_base: u32,
-    t_base: u32,
+    s_base: usize,
+    t_base: usize,
     tex_mode: TexMode,
+    palette_coord: PaletteCoord,
 }
 
 impl TexInfo {
-    fn new(texcoord_1: u32, texcoord_2: u32) -> Self {
-        let palette = texcoord_1 >> 16;
-        let page = texcoord_2 >> 16;
-        let tex_mode = match (page >> 7) & 0x3 {
-            0 => TexMode::Palette4((palette & 0x3F) * 16, (palette >> 6) & 0x1FF),
-            1 => TexMode::Palette8((palette & 0x3F) * 16, (palette >> 6) & 0x1FF),
+    fn from_data(texcoord_1: u32, texcoord_2: u32) -> Self {
+        let palette = PaletteCoord::from_data(texcoord_1);
+        let draw_mode = (texcoord_2 >> 16) as u16;
+        Self::from_draw_mode(draw_mode, palette)
+    }
+
+    fn from_draw_mode(draw_mode: u16, palette: PaletteCoord) -> Self {
+        let tex_mode = match (draw_mode >> 7) & 0x3 {
+            0 => TexMode::Palette4,
+            1 => TexMode::Palette8,
             _ => TexMode::Direct,
         };
         Self {
-            s_base: (page & 0xF) * 64,
-            t_base: (page & 0x10) << 4,
+            s_base: ((draw_mode & 0x0F) as usize) << 6,
+            t_base: ((draw_mode & 0x10) as usize) << 4,
             tex_mode,
+            palette_coord: palette,
         }
     }
 }
 
 enum TexMode {
     /// 4 bpp with palette
-    Palette4(u32, u32),
+    Palette4,
     /// 8 bpp with palette
-    Palette8(u32, u32),
+    Palette8,
     /// RGB-15
     Direct,
 }

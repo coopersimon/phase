@@ -1,5 +1,5 @@
 use super::{
-    RendererImpl, Coord, Size, Color, Vertex, TexInfo, TexMode
+    RendererImpl, Coord, Size, Color, Vertex, TexInfo, TexMode, TexCoord, PaletteCoord
 };
 
 use crate::{
@@ -128,19 +128,16 @@ impl RendererImpl for SoftwareRenderer {
     }
 
     fn set_draw_area_top_left(&mut self, left: u16, top: u16) {
-        //println!("Draw area TL: {:X},{:X}", left, top);
         self.drawing_area.left = left;
         self.drawing_area.top = top;
     }
 
     fn set_draw_area_bottom_right(&mut self, right: u16, bottom: u16) {
-        //println!("Draw area BR: {:X},{:X}", right, bottom);
         self.drawing_area.right = right;
         self.drawing_area.bottom = bottom;
     }
 
     fn set_draw_area_offset(&mut self, x: i16, y: i16) {
-        //println!("Draw area Offset: {:X},{:X}", x, y);
         self.draw_offset.0 = x;
         self.draw_offset.1 = y;
     }
@@ -167,36 +164,7 @@ impl RendererImpl for SoftwareRenderer {
 
     fn draw_triangle_tex(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool) {
         self.rasterize_triangle(vertices, |renderer: &Self, line: &Line| {
-            let (tex_s, tex_t) = line.get_tex_coords();
-            let tex_s = (tex_s & !renderer.tex_window.mask_s) | (renderer.tex_window.mask_s & renderer.tex_window.offset_s);
-            let tex_t = (tex_t & !renderer.tex_window.mask_t) | (renderer.tex_window.mask_t & renderer.tex_window.offset_t);
-            let t = tex_t as usize + tex_info.t_base as usize;
-            let tex_color = match tex_info.tex_mode {
-                TexMode::Palette4(x, y) => {
-                    let s = (tex_s as usize / 4) + tex_info.s_base as usize;
-                    let tex_addr = t * 1024 + s;
-                    let data = renderer.vram[tex_addr];
-                    let palette_shift = (tex_s & 0x3) * 4;
-                    let palette_idx = ((data >> palette_shift) & 0xF) as u32;
-                    //println!("s: {:X} t: {:X} addr: {:X} idx: {:X}", line.tex_s, line.tex_t, tex_addr, palette_idx);
-                    let palette_addr = (y * 1024 + x + palette_idx) as usize;
-                    renderer.vram[palette_addr]
-                },
-                TexMode::Palette8(x, y) => {
-                    let s = (tex_s as usize / 2) + tex_info.s_base as usize;
-                    let tex_addr = t * 1024 + s;
-                    let data = renderer.vram[tex_addr];
-                    let palette_shift = (tex_s & 0x1) * 8;
-                    let palette_idx = ((data >> palette_shift) & 0xFF) as u32;
-                    let palette_addr = (y * 1024 + x + palette_idx) as usize;
-                    renderer.vram[palette_addr]
-                },
-                TexMode::Direct => {
-                    let s = tex_s as usize + tex_info.s_base as usize;
-                    let tex_addr = t * 1024 + s;
-                    renderer.vram[tex_addr]
-                }
-            };
+            let tex_color = renderer.tex_lookup(&line.get_tex_coords(), tex_info);
             if tex_color == 0 {
                 None
             } else {
@@ -204,6 +172,41 @@ impl RendererImpl for SoftwareRenderer {
                 Some(frag_color.blend(&Color::from_rgb15(tex_color)))
             }
         });
+    }
+
+    fn draw_rectangle(&mut self, color: Color, top_left: Coord, size: Size, transparent: bool) {
+        let top = top_left.y;
+        let bottom = top + size.height;
+        let left = top_left.x;
+        let right = left + size.width;
+        for y in top..bottom {
+            let line_addr = (y as usize) * 1024;
+            for x in left..right {
+                let addr = line_addr + (x as usize);
+                self.vram[addr] = color.to_rgb15();
+            }
+        }
+    }
+
+    fn draw_rectangle_tex(&mut self, color: Color, tex_coord: TexCoord, tex_info: &TexInfo, top_left: Coord, size: Size, transparent: bool) {
+        let top = top_left.y;
+        let bottom = top + size.height;
+        let left = top_left.x;
+        let right = left + size.width;
+        let mut current_tex_coord = tex_coord;
+        for y in top..bottom {
+            let line_addr = (y as usize) * 1024;
+            for x in left..right {
+                let tex_color = self.tex_lookup(&current_tex_coord, tex_info);
+                if tex_color != 0 {
+                    let addr = line_addr + (x as usize);
+                    self.vram[addr] = color.blend(&Color::from_rgb15(tex_color)).to_rgb15();
+                }
+                current_tex_coord.s += 1;
+            }
+            current_tex_coord.t += 1;
+            current_tex_coord.s = tex_coord.s;
+        }
     }
 }
 
@@ -223,9 +226,13 @@ impl SoftwareRenderer {
             return;
         };
         //println!("Line 0 (tex) {:X},{:X} => {:X},{:X}", lines.left.tex_s, lines.left.tex_t, lines.right.tex_s, lines.right.tex_t);
+        //println!("Line 0 (rgb) {:X},{:X},{:X}", lines.left.r_gradient, lines.left.b_gradient, lines.left.g_gradient);
         // TODO: clip at view bounds
         self.draw_lines(min_y, &mut lines, &raster_f);
         min_y = lines.max_y;
+        if min_y > self.drawing_area.bottom {
+            return;
+        }
         // TODO: validate that we get more if min_y < max_y
         // Also: we kind of want to _replace_ one of our lines (either left or right?)
         if let Some(mut lines) = Self::get_intersection_points(vertices, min_y) {
@@ -235,7 +242,8 @@ impl SoftwareRenderer {
     }
 
     fn draw_lines<F: Fn(&Self, &Line) -> Option<Color>>(&mut self, min_y: u16, lines: &mut Lines, raster_f: &F) {
-        for y in min_y..lines.max_y {
+        let max_y = lines.max_y.min(self.drawing_area.bottom);
+        for y in min_y..max_y {
             let left = lines.left.get_x();
             let right = lines.right.get_x();
             if left != right {
@@ -261,7 +269,7 @@ impl SoftwareRenderer {
         for i in 0..3 {
             let vertex_a = &vertices[i];
             let vertex_b = &vertices[(i + 1) % 3];
-            // (0,0) is TOP-LEFT. (TODO: verify..?)
+            // (0,0) is TOP-LEFT.
             let (top, bottom) = if vertex_a.coord.y > vertex_b.coord.y {
                 (vertex_b, vertex_a)
             } else {
@@ -303,6 +311,38 @@ impl SoftwareRenderer {
             None
         }
     }
+
+    fn tex_lookup(&self, tex_coords: &TexCoord, tex_info: &TexInfo) -> u16 {
+        let tex_s = (tex_coords.s & !self.tex_window.mask_s) | (self.tex_window.mask_s & self.tex_window.offset_s);
+        let tex_t = (tex_coords.t & !self.tex_window.mask_t) | (self.tex_window.mask_t & self.tex_window.offset_t);
+        let t = tex_t as usize + tex_info.t_base;
+        match tex_info.tex_mode {
+            TexMode::Palette4 => {
+                let s = (tex_s as usize / 4) + tex_info.s_base;
+                let tex_addr = t * 1024 + s;
+                let data = self.vram[tex_addr];
+                let palette_shift = (tex_s & 0x3) * 4;
+                let palette_idx = ((data >> palette_shift) & 0xF) as usize;
+                //println!("s: {:X} t: {:X} addr: {:X} idx: {:X}", line.tex_s, line.tex_t, tex_addr, palette_idx);
+                let palette_addr = tex_info.palette_coord.y * 1024 + tex_info.palette_coord.x + palette_idx;
+                self.vram[palette_addr]
+            },
+            TexMode::Palette8 => {
+                let s = (tex_s as usize / 2) + tex_info.s_base;
+                let tex_addr = t * 1024 + s;
+                let data = self.vram[tex_addr];
+                let palette_shift = (tex_s & 0x1) * 8;
+                let palette_idx = ((data >> palette_shift) & 0xFF) as usize;
+                let palette_addr = tex_info.palette_coord.y * 1024 + tex_info.palette_coord.x + palette_idx;
+                self.vram[palette_addr]
+            },
+            TexMode::Direct => {
+                let s = tex_s as usize + tex_info.s_base;
+                let tex_addr = t * 1024 + s;
+                self.vram[tex_addr]
+            }
+        }
+    }
 }
 
 struct Line {
@@ -325,8 +365,8 @@ struct Line {
 impl Line {
     fn from_vertices(top: &Vertex, bottom: &Vertex) -> Self {
         let gradient = (1 << 16) / ((bottom.coord.y - top.coord.y) as i32);
-        let tex_s_diff = bottom.tex_s as i32 - top.tex_s as i32;
-        let tex_t_diff = bottom.tex_t as i32 - top.tex_t as i32;
+        let tex_s_diff = bottom.tex.s as i32 - top.tex.s as i32;
+        let tex_t_diff = bottom.tex.t as i32 - top.tex.t as i32;
         Self {
             x_gradient: gradient * (bottom.coord.x as i32 - top.coord.x as i32),
             x: (top.coord.x as i32) << 16,
@@ -337,9 +377,9 @@ impl Line {
             b_gradient: gradient * (bottom.col.b as i32 - top.col.b as i32),
             b: (top.col.b as i32) << 16,
             tex_s_gradient: gradient * tex_s_diff,
-            tex_s: (top.tex_s as i32) << 16,
+            tex_s: (top.tex.s as i32) << 16,
             tex_t_gradient: gradient * tex_t_diff,
-            tex_t: (top.tex_t as i32) << 16,
+            tex_t: (top.tex.t as i32) << 16,
         }
     }
 
@@ -373,10 +413,10 @@ impl Line {
             b: (self.b >> 16) as u8,
         }
     }
-    fn get_tex_coords(&self) -> (u8, u8) {
-        let tex_s = ((self.tex_s + 0x8000) >> 16) as u8;
-        let tex_t = ((self.tex_t + 0x8000) >> 16) as u8;
-        (tex_s, tex_t)
+    fn get_tex_coords(&self) -> TexCoord {
+        let s = ((self.tex_s + 0x8000) >> 16) as u8;
+        let t = ((self.tex_t + 0x8000) >> 16) as u8;
+        TexCoord { s, t }
     }
 
     /// Advance internal state.
