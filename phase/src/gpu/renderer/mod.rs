@@ -10,7 +10,10 @@ use crossbeam_channel::{
 };
 
 use crate::{
-    Frame, gpu::InterlaceState, utils::bits::*
+    Frame, utils::bits::*
+};
+use super::{
+    InterlaceState
 };
 
 use software::SoftwareRenderer;
@@ -170,6 +173,7 @@ impl Renderer {
         let h_res = self.status.h_res();
         let v_res = self.status.v_res();
         self.frame.lock().unwrap().resize((h_res, v_res));
+        //self.frame.lock().unwrap().resize((1024, 512));
         self.renderer.set_display_resolution(Size { width: h_res as u16, height: v_res as u16 });
     }
 
@@ -797,9 +801,9 @@ impl Color {
 
     fn blend(&self, other: &Color) -> Color {
         Color {
-            r: ((self.r as u16) * (other.r as u16) >> 8) as u8,
-            g: ((self.g as u16) * (other.g as u16) >> 8) as u8,
-            b: ((self.b as u16) * (other.b as u16) >> 8) as u8,
+            r: (((self.r as u16) * (other.r as u16)) >> 8) as u8,
+            g: (((self.g as u16) * (other.g as u16)) >> 8) as u8,
+            b: (((self.b as u16) * (other.b as u16)) >> 8) as u8,
         }
     }
 }

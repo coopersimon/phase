@@ -71,8 +71,11 @@ impl MemBus {
     /// and therefore we are syncing with the real world.
     fn do_clock(&mut self, cycles: usize) -> bool {
         let gpu_stat = self.gpu.clock(cycles);
-        if self.gpu.dma_ready() {
-            self.dma.gpu_req();
+        if self.gpu.dma_recv_ready() {
+            self.dma.gpu_recv_req();
+        }
+        if self.gpu.dma_send_ready() {
+            self.dma.gpu_send_req();
         }
 
         let dma_irq = self.dma.check_irq();

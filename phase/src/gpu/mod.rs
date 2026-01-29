@@ -69,10 +69,16 @@ impl GPU {
         res
     }
 
-    /// Check if the GPU is ready to transfer via DMA.
-    pub fn dma_ready(&self) -> bool {
+    /// Check if the GPU is ready to receive data via DMA.
+    pub fn dma_recv_ready(&self) -> bool {
         let mask = (GPUStatus::DMAMode | GPUStatus::DMARecvReady).bits();
         (self.status.load(Ordering::Acquire) & mask) == GPUStatus::TransferReady.bits()
+    }
+
+    /// Check if the GPU is ready to send data to CPU via DMA.
+    pub fn dma_send_ready(&self) -> bool {
+        // TODO: more required here..?
+        !self.vram_rx.is_empty()
     }
 
     /// This extracts a frame from the renderer. It needs to communicate across a thread.
@@ -114,9 +120,9 @@ impl DMADevice for GPU {
             println!("reading blank, current mode: {}", dma_mode);
             0
         };*/
-        let data = self.vram_rx.try_recv().unwrap_or_default();
+        let data = self.vram_rx.recv().unwrap_or_default();
         //println!("got {:X}", data);
-        Data { data, cycles: 1 }
+        Data { data: data, cycles: 1 }
     }
 
     fn dma_write_word(&mut self, data: u32) -> usize {
@@ -160,7 +166,9 @@ impl GPU {
     }
 
     fn recv_response(&mut self) -> u32 {
-        self.read_reg
+        let data = self.vram_rx.try_recv().unwrap_or(self.read_reg);
+        self.read_reg = data;
+        data
     }
 
     fn read_status(&self) -> u32 {

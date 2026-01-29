@@ -1,5 +1,5 @@
 use super::{
-    RendererImpl, Coord, Size, Color, Vertex, TexInfo, TexMode, TexCoord, PaletteCoord
+    RendererImpl, Coord, Size, Color, Vertex, TexInfo, TexMode, TexCoord
 };
 
 use crate::{
@@ -30,7 +30,7 @@ pub struct SoftwareRenderer {
     resolution: Size,
     frame_pos: Coord,
     drawing_area: DrawingArea,
-    draw_offset: (i16, i16),
+    draw_offset: Coord,
     tex_window: TextureWindow,
 }
 
@@ -43,7 +43,7 @@ impl SoftwareRenderer {
             resolution: Size { width: 320, height: 240 },
             frame_pos: Coord { x: 0, y: 0 },
             drawing_area: DrawingArea { top: 0, bottom: 0, left: 0, right: 0 },
-            draw_offset: (0, 0),
+            draw_offset: Coord { x: 0, y: 0 },
             tex_window: TextureWindow { mask_s: 0, mask_t: 0, offset_s: 0, offset_t: 0 }
         }
     }
@@ -61,6 +61,7 @@ impl RendererImpl for SoftwareRenderer {
                 };
                 let mut frame_idx = y * line_size;
                 let mut vram_addr = Coord {x: self.frame_pos.x, y: self.frame_pos.y + (y as i16)}.get_vram_idx();
+                //let mut vram_addr = Coord {x: 0, y: y as i16}.get_vram_idx();
                 for _ in 0..self.resolution.width {
                     let pixel = self.vram[vram_addr];
                     let col = Color::from_rgb15(pixel);
@@ -138,8 +139,8 @@ impl RendererImpl for SoftwareRenderer {
     }
 
     fn set_draw_area_offset(&mut self, x: i16, y: i16) {
-        self.draw_offset.0 = x;
-        self.draw_offset.1 = y;
+        self.draw_offset.x = x;
+        self.draw_offset.y = y;
     }
 
     fn set_mask_settings(&mut self, set_mask_bit: bool, check_mask_bit: bool) {
@@ -215,13 +216,13 @@ impl SoftwareRenderer {
     fn rasterize_triangle<F: Fn(&Self, &Line) -> Option<Color>>(&mut self, vertices: &[Vertex], raster_f: F) {
         let mut min_y = std::i16::MAX;
         let mut max_y = std::i16::MIN;
-        println!("Draw triangle:");
+        //println!("Draw triangle:");
         for v in vertices {
-            println!("  {}, {}", v.coord.x, v.coord.y);
+            //println!("  {}, {} TEX: {}, {}", v.coord.x, v.coord.y, v.tex.s, v.tex.t);
             min_y = min_y.min(v.coord.y);
             max_y = max_y.max(v.coord.y);
         }
-        min_y = min_y.max(self.drawing_area.top);
+        //min_y = min_y.max(self.drawing_area.top);
         //max_y = max_y.min(self.drawing_area.bottom);
         let Some(mut lines) = Self::get_intersection_points(vertices, min_y) else {
             panic!("no intersection points found"); // TODO: just return?
@@ -232,9 +233,9 @@ impl SoftwareRenderer {
         // TODO: clip at view bounds
         self.draw_lines(min_y, &mut lines, &raster_f);
         min_y = lines.max_y;
-        if min_y > self.drawing_area.bottom {
+        /*if min_y > self.drawing_area.bottom {
             return;
-        }
+        }*/
         // TODO: validate that we get more if min_y < max_y
         // Also: we kind of want to _replace_ one of our lines (either left or right?)
         if let Some(mut lines) = Self::get_intersection_points(vertices, min_y) {
@@ -244,14 +245,25 @@ impl SoftwareRenderer {
     }
 
     fn draw_lines<F: Fn(&Self, &Line) -> Option<Color>>(&mut self, min_y: i16, lines: &mut Lines, raster_f: &F) {
-        let max_y = lines.max_y.min(self.drawing_area.bottom);
+        let base_y = min_y + self.draw_offset.y;
+        if base_y < self.drawing_area.top {
+            lines.left.mul((self.drawing_area.top - base_y) as i32);
+            lines.right.mul((self.drawing_area.top - base_y) as i32);
+        }
+        let min_y = base_y.max(self.drawing_area.top);
+        let max_y = (lines.max_y + self.draw_offset.y).min(self.drawing_area.bottom);
         for y in min_y..max_y {
-            let left = lines.left.get_x().max(self.drawing_area.left);
-            let right = lines.right.get_x().min(self.drawing_area.right);
-            if left != right {
+            let left = lines.left.get_x() + self.draw_offset.x;
+            let right = lines.right.get_x() + self.draw_offset.x;
+            let min_x = left.max(self.drawing_area.left);
+            let max_x = right.min(self.drawing_area.right);
+            if min_x != max_x {
                 let line_addr = (y as usize) * 1024;
-                let mut line = Line::from_lines(&lines.left, &lines.right, left);
-                for x in left..right {
+                let mut line = Line::from_lines(&lines.left, &lines.right, lines.left.get_x());
+                if left < self.drawing_area.left {
+                    line.mul((self.drawing_area.left - left) as i32);
+                }
+                for x in min_x..max_x {
                     if let Some(col) = raster_f(self, &line) {
                         let addr = line_addr + (x as usize);
                         self.vram[addr] = col.to_rgb15();
@@ -375,6 +387,11 @@ impl InterpolatedValue {
     fn inc(&mut self) {
         self.val += self.gradient;
     }
+
+    /// Inc i times.
+    fn mul(&mut self, i: i32) {
+        self.val += i * self.gradient;
+    }
 }
 
 struct Line {
@@ -420,9 +437,9 @@ impl Line {
     }
     fn get_color(&self) -> Color {
         Color {
-            r: (self.r.val >> 16) as u8,
-            g: (self.g.val >> 16) as u8,
-            b: (self.b.val >> 16) as u8,
+            r: ((self.r.val + 0x8000) >> 16) as u8,
+            g: ((self.g.val + 0x8000) >> 16) as u8,
+            b: ((self.b.val + 0x8000) >> 16) as u8,
         }
     }
     fn get_tex_coords(&self) -> TexCoord {
@@ -439,6 +456,16 @@ impl Line {
         self.b.inc();
         self.tex_s.inc();
         self.tex_t.inc();
+    }
+
+    /// Inc i times.
+    fn mul(&mut self, i: i32) {
+        self.x.mul(i);
+        self.r.mul(i);
+        self.g.mul(i);
+        self.b.mul(i);
+        self.tex_s.mul(i);
+        self.tex_t.mul(i);
     }
 }
 

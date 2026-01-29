@@ -72,14 +72,18 @@ impl DMA {
         self.channels[4].start_sync_mode(DMA_REQ_MODE);
     }
 
-    pub fn gpu_data_req(&mut self) {
-        self.channels[2].start_sync_mode(DMA_REQ_MODE);
+    pub fn gpu_recv_req(&mut self) {
+        // TODO: only one call here...
+        if self.channels[2].control.contains(ChannelControl::TransferDir) {
+            self.channels[2].start_sync_mode(DMA_REQ_MODE);
+            self.channels[2].start_sync_mode(DMA_LIST_MODE);
+        }
     }
 
-    pub fn gpu_req(&mut self) {
-        // TODO: only one call here...
-        self.channels[2].start_sync_mode(DMA_REQ_MODE);
-        self.channels[2].start_sync_mode(DMA_LIST_MODE);
+    pub fn gpu_send_req(&mut self) {
+        if !self.channels[2].control.contains(ChannelControl::TransferDir) {
+            self.channels[2].start_sync_mode(DMA_REQ_MODE);
+        }
     }
 
     pub fn mut_table_gen<'a>(&'a mut self) -> &'a mut OrderingTableGen {
@@ -366,7 +370,7 @@ impl DMAChannel {
                 self.active = true;
                 self.current_addr = self.base_addr;
                 self.current_word_count = self.block_control & 0xFFFF;
-                self.current_block_count = 0;//(self.block_control >> 16) & 0xFFFF;
+                self.current_block_count = 0;
             } else if self.control.contains(ChannelControl::StartBusy) {
                 self.active = true;
             }
@@ -402,18 +406,19 @@ impl DMAChannel {
     fn finish_block(&mut self) -> bool {
         if self.get_mode() == DMA_LIST_MODE {
             // TODO: this should probably not panic.
-            let next_addr = self.next_list_addr.take().expect("no next address for list data!");
-            if next_addr == END_CODE {
+            self.base_addr = self.next_list_addr.take().expect("no next address for list data!") & 0xFF_FFFF;
+            if self.base_addr == END_CODE {
                 self.control.remove(ChannelControl::StartBusy);
                 true
             } else {
-                self.current_addr = next_addr;
+                self.current_addr = self.base_addr;
                 false
             }
         } else if self.current_block_count <= 1 {
             self.control.remove(ChannelControl::StartBusy);
             true
         } else {
+            self.base_addr = self.current_addr;
             self.current_word_count = self.block_control & 0xFFFF;
             self.current_block_count -= 1;
             false
