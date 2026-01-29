@@ -3,7 +3,7 @@ use super::{
 };
 
 use crate::{
-    Frame, gpu::InterlaceState, mem::ram::RAM
+    Frame, gpu::InterlaceState
 };
 
 struct DrawingArea {
@@ -23,7 +23,7 @@ struct TextureWindow {
 /// Software implementation of rendering functions
 /// for the PlayStation GPU.
 pub struct SoftwareRenderer {
-    vram: RAM,
+    vram: Vec<u16>,
 
     // Settings
     enable_display: bool,
@@ -37,7 +37,7 @@ pub struct SoftwareRenderer {
 impl SoftwareRenderer {
     pub fn new() -> Self {
         Self {
-            vram: RAM::new(super::VRAM_SIZE),
+            vram: vec![0; super::VRAM_SIZE / 2],
 
             enable_display: false,
             resolution: Size { width: 320, height: 240 },
@@ -52,7 +52,6 @@ impl SoftwareRenderer {
 impl RendererImpl for SoftwareRenderer {
     fn get_frame(&mut self, frame: &mut Frame, interlace_state: InterlaceState) {
         if self.enable_display {
-            println!("draw {:?} offset {}, {}", interlace_state, self.frame_pos.x, self.frame_pos.y);
             let line_size = (self.resolution.width as usize) * 4;
             for y in 0..240 {
                 let y = match interlace_state {
@@ -61,15 +60,15 @@ impl RendererImpl for SoftwareRenderer {
                     InterlaceState::Odd => y * 2 + 1,
                 };
                 let mut frame_idx = y * line_size;
-                let mut vram_addr = Coord {x: self.frame_pos.x, y: self.frame_pos.y + (y as u16)}.get_vram_idx() as u32;
+                let mut vram_addr = Coord {x: self.frame_pos.x, y: self.frame_pos.y + (y as u16)}.get_vram_idx();
                 for _ in 0..self.resolution.width {
-                    let pixel = self.vram.read_halfword(vram_addr);
+                    let pixel = self.vram[vram_addr];
                     let col = Color::from_rgb15(pixel);
                     frame.frame_buffer[frame_idx + 0] = col.r;
                     frame.frame_buffer[frame_idx + 1] = col.g;
                     frame.frame_buffer[frame_idx + 2] = col.b;
                     frame_idx += 4;
-                    vram_addr += 2;
+                    vram_addr += 1;
                 }
             }
         } else {
@@ -77,42 +76,31 @@ impl RendererImpl for SoftwareRenderer {
         }
     }
     fn write_vram_block(&mut self, data_in: &[u16], to: Coord, size: Size) {
-        let mut data_idx = 0;
         for y in 0..size.height {
-            // TODO: block copy.
-            let mut addr = Coord {x: to.x, y: to.y + y}.get_vram_idx() as u32;
-            for _ in 0..size.width {
-                self.vram.write_halfword(addr, data_in[data_idx]);
-                data_idx += 1;
-                addr += 2;
-            }
+            let src_begin = (y * size.width) as usize;
+            let src_end = src_begin + (size.width as usize);
+            let dst_begin = Coord {x: to.x, y: to.y + y}.get_vram_idx();
+            let dst_end = dst_begin + (size.width as usize);
+            let dest = &mut self.vram[dst_begin..dst_end];
+            dest.copy_from_slice(&data_in[src_begin..src_end]);
         }
     }
     fn read_vram_block(&mut self, data_out: &mut [u16], from: Coord, size: Size) {
-        let mut data_idx = 0;
         for y in 0..size.height {
-            // TODO: block copy.
-            let mut addr = Coord {x: from.x, y: from.y + y}.get_vram_idx() as u32;
-            for _ in 0..size.width {
-                data_out[data_idx] = self.vram.read_halfword(addr);
-                data_idx += 1;
-                addr += 2;
-            }
+            let dst_begin = (y * size.width) as usize;
+            let dst_end = dst_begin + (size.width as usize);
+            let src_begin = Coord {x: from.x, y: from.y + y}.get_vram_idx();
+            let src_end = src_begin + (size.width as usize);
+            let dest = &mut data_out[dst_begin..dst_end];
+            dest.copy_from_slice(&self.vram[src_begin..src_end]);
         }
     }
     fn copy_vram_block(&mut self, from: Coord, to: Coord, size: Size) {
         for line in 0..size.height {
-            let mut src_addr = Coord {x: from.x, y: from.y + line}.get_vram_idx() as u32;
-            let mut dst_addr = Coord {x: to.x, y: to.y + line}.get_vram_idx() as u32;
-            //let copy_size = (size.width as usize) * 2;
-            // TODO: use copy_within for block copy.
-            for _ in 0..size.width {
-                let pixel = self.vram.read_halfword(src_addr);
-                self.vram.write_halfword(dst_addr, pixel);
-                // TODO: wraparound...
-                src_addr += 2;
-                dst_addr += 2;
-            }
+            let src_begin = Coord {x: from.x, y: from.y + line}.get_vram_idx();
+            let src_end = src_begin + (size.width as usize);
+            let dest = Coord {x: to.x, y: to.y + line}.get_vram_idx();
+            self.vram.copy_within(src_begin..src_end, dest);
         }
     }
 
@@ -140,22 +128,35 @@ impl RendererImpl for SoftwareRenderer {
     }
 
     fn set_draw_area_top_left(&mut self, left: u16, top: u16) {
+        //println!("Draw area TL: {:X},{:X}", left, top);
         self.drawing_area.left = left;
         self.drawing_area.top = top;
     }
 
     fn set_draw_area_bottom_right(&mut self, right: u16, bottom: u16) {
+        //println!("Draw area BR: {:X},{:X}", right, bottom);
         self.drawing_area.right = right;
         self.drawing_area.bottom = bottom;
     }
 
     fn set_draw_area_offset(&mut self, x: i16, y: i16) {
+        //println!("Draw area Offset: {:X},{:X}", x, y);
         self.draw_offset.0 = x;
         self.draw_offset.1 = y;
     }
 
     fn set_mask_settings(&mut self, set_mask_bit: bool, check_mask_bit: bool) {
         // TODO: set
+    }
+
+    fn fill_rectangle(&mut self, color: Color, top_left: Coord, size: Size) {
+        let rgb15 = color.to_rgb15();
+        for y in 0..size.height {
+            let dst_begin = Coord {x: top_left.x, y: top_left.y + y}.get_vram_idx();
+            let dst_end = dst_begin + (size.width as usize);
+            let dest = &mut self.vram[dst_begin..dst_end];
+            dest.fill(rgb15);
+        }
     }
 
     fn draw_triangle(&mut self, vertices: &[Vertex], transparent: bool) {
@@ -169,33 +170,31 @@ impl RendererImpl for SoftwareRenderer {
             let (tex_s, tex_t) = line.get_tex_coords();
             let tex_s = (tex_s & !renderer.tex_window.mask_s) | (renderer.tex_window.mask_s & renderer.tex_window.offset_s);
             let tex_t = (tex_t & !renderer.tex_window.mask_t) | (renderer.tex_window.mask_t & renderer.tex_window.offset_t);
-            let t = tex_t as u32 + tex_info.t_base;
+            let t = tex_t as usize + tex_info.t_base as usize;
             let tex_color = match tex_info.tex_mode {
                 TexMode::Palette4(x, y) => {
-                    let s = (tex_s as u32 / 2) + tex_info.s_base;
-                    let tex_addr = t * 2048 + s;
-                    let data = renderer.vram.read_byte(tex_addr);
-                    let palette_idx = if tex_s & 1 == 1 {
-                        data >> 4
-                    } else {
-                        data & 0xF
-                    } as u32;
+                    let s = (tex_s as usize / 4) + tex_info.s_base as usize;
+                    let tex_addr = t * 1024 + s;
+                    let data = renderer.vram[tex_addr];
+                    let palette_shift = (tex_s & 0x3) * 4;
+                    let palette_idx = ((data >> palette_shift) & 0xF) as u32;
                     //println!("s: {:X} t: {:X} addr: {:X} idx: {:X}", line.tex_s, line.tex_t, tex_addr, palette_idx);
-                    let palette_addr = y * 2048 + x + palette_idx;
-                    renderer.vram.read_halfword(palette_addr)
+                    let palette_addr = (y * 1024 + x + palette_idx) as usize;
+                    renderer.vram[palette_addr]
                 },
                 TexMode::Palette8(x, y) => {
-                    let s = (tex_s as u32) + tex_info.s_base;
-                    let tex_addr = t * 2048 + s;
-                    let data = renderer.vram.read_byte(tex_addr);
-                    let palette_idx = data as u32;
-                    let palette_addr = y * 2048 + x + palette_idx;
-                    renderer.vram.read_halfword(palette_addr)
+                    let s = (tex_s as usize / 2) + tex_info.s_base as usize;
+                    let tex_addr = t * 1024 + s;
+                    let data = renderer.vram[tex_addr];
+                    let palette_shift = (tex_s & 0x1) * 8;
+                    let palette_idx = ((data >> palette_shift) & 0xFF) as u32;
+                    let palette_addr = (y * 1024 + x + palette_idx) as usize;
+                    renderer.vram[palette_addr]
                 },
                 TexMode::Direct => {
-                    let s = (tex_s as u32) * 2 + tex_info.s_base;
-                    let tex_addr = t * 2048 + s;
-                    renderer.vram.read_halfword(tex_addr)
+                    let s = tex_s as usize + tex_info.s_base as usize;
+                    let tex_addr = t * 1024 + s;
+                    renderer.vram[tex_addr]
                 }
             };
             if tex_color == 0 {
@@ -213,9 +212,9 @@ impl SoftwareRenderer {
     fn rasterize_triangle<F: Fn(&Self, &Line) -> Option<Color>>(&mut self, vertices: &[Vertex], raster_f: F) {
         let mut min_y = std::u16::MAX;
         let mut max_y = std::u16::MIN;
-        println!("Draw triangle:");
+        //println!("Draw triangle:");
         for v in vertices {
-            println!("  {}, {}", v.coord.x, v.coord.y);
+            //println!("  {}, {}", v.coord.x, v.coord.y);
             min_y = min_y.min(v.coord.y);
             max_y = max_y.max(v.coord.y);
         }
@@ -225,16 +224,27 @@ impl SoftwareRenderer {
         };
         //println!("Line 0 (tex) {:X},{:X} => {:X},{:X}", lines.left.tex_s, lines.left.tex_t, lines.right.tex_s, lines.right.tex_t);
         // TODO: clip at view bounds
+        self.draw_lines(min_y, &mut lines, &raster_f);
+        min_y = lines.max_y;
+        // TODO: validate that we get more if min_y < max_y
+        // Also: we kind of want to _replace_ one of our lines (either left or right?)
+        if let Some(mut lines) = Self::get_intersection_points(vertices, min_y) {
+            // Continue drawing.
+            self.draw_lines(min_y, &mut lines, &raster_f);
+        };
+    }
+
+    fn draw_lines<F: Fn(&Self, &Line) -> Option<Color>>(&mut self, min_y: u16, lines: &mut Lines, raster_f: &F) {
         for y in min_y..lines.max_y {
             let left = lines.left.get_x();
             let right = lines.right.get_x();
             if left != right {
-                let line_addr = (y as u32) * 2048;
+                let line_addr = (y as usize) * 1024;
                 let mut line = Line::from_lines(&lines.left, &lines.right);
                 for x in left..right {
                     if let Some(col) = raster_f(self, &line) {
-                        let addr = line_addr + (x as u32 * 2);
-                        self.vram.write_halfword(addr, col.to_rgb15());
+                        let addr = line_addr + (x as usize);
+                        self.vram[addr] = col.to_rgb15();
                     }
                     line.inc();
                 }
@@ -242,29 +252,6 @@ impl SoftwareRenderer {
             lines.left.inc();
             lines.right.inc();
         }
-        min_y = lines.max_y;
-        // TODO: validate that we get more if min_y < max_y
-        // Also: we kind of want to _replace_ one of our lines (either left or right?)
-        if let Some(mut lines) = Self::get_intersection_points(vertices, min_y) {
-            // Continue drawing.
-            for y in min_y..lines.max_y {
-                let left = lines.left.get_x();
-                let right = lines.right.get_x();
-                if left != right {
-                    let line_addr = (y as u32) * 2048;
-                    let mut line = Line::from_lines(&lines.left, &lines.right);
-                    for x in left..right {
-                        if let Some(col) = raster_f(self, &line) {
-                            let addr = line_addr + (x as u32 * 2);
-                            self.vram.write_halfword(addr, col.to_rgb15());
-                        }
-                        line.inc();
-                    }
-                }
-                lines.left.inc();
-                lines.right.inc();
-            }
-        };
     }
 
     fn get_intersection_points(vertices: &[Vertex], line: u16) -> Option<Lines> {

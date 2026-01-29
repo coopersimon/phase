@@ -103,21 +103,23 @@ impl MemInterface for GPU {
     }
 }
 
+// TODO: properly track state by waiting for render thread to acknowledge DMA mode.
 impl DMADevice for GPU {
     fn dma_read_word(&mut self) -> Data<u32> {
-        let status = self.status.load(Ordering::Acquire);
+        /*let status = self.status.load(Ordering::Acquire);
         let dma_mode = (status & GPUStatus::DMAMode.bits()) >> 29;
         let data = if dma_mode == 3 {
             self.vram_rx.try_recv().unwrap_or_default()
         } else {
             println!("reading blank, current mode: {}", dma_mode);
             0
-        };
+        };*/
+        let data = self.vram_rx.try_recv().unwrap_or_default();
+        //println!("got {:X}", data);
         Data { data, cycles: 1 }
     }
 
     fn dma_write_word(&mut self, data: u32) -> usize {
-        // TODO: properly track state?
         /*let status = self.status.load(Ordering::Acquire);
         let dma_mode = (status & GPUStatus::DMAMode.bits()) >> 29;
         if dma_mode == 2 {
@@ -236,6 +238,7 @@ impl GPU {
     }
 
     fn get_gpu_info(&mut self, param: u32) {
+        println!("Get GPU INFO {:X}", param);
         match param & 0x7 {
             2 => self.read_reg = 0, // Tex window
             3 => self.read_reg = 0, // Draw area top-left

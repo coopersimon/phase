@@ -273,9 +273,10 @@ impl Renderer {
 
     /// Fill a rectangle.
     fn fill_rectangle(&mut self, rgb: u32) {
-        let top_left = self.get_parameter();
-        let size = self.get_parameter();
-
+        let top_left = Coord::from_xy(self.get_parameter());
+        let size = Size::from_xy(self.get_parameter());
+        let color = Color::from_rgb24(rgb);
+        self.renderer.fill_rectangle(color, top_left, size);
     }
 
     /// Draw a triangle.
@@ -457,6 +458,7 @@ impl Renderer {
     fn draw_line(&mut self, rgb: u32, transparent: bool) {
         let vertex_1 = self.get_parameter();
         let vertex_2 = self.get_parameter();
+        unimplemented!("draw line");
     }
 
     fn draw_poly_line(&mut self, rgb: u32, transparent: bool) {
@@ -467,12 +469,14 @@ impl Renderer {
                 break;
             }
         }
+        unimplemented!("draw poly line");
     }
 
     fn draw_shaded_line(&mut self, rgb_1: u32, transparent: bool) {
         let vertex_1 = self.get_parameter();
         let rgb_2 = self.get_parameter();
         let vertex_2 = self.get_parameter();
+        unimplemented!("draw shaded line");
     }
 
     fn draw_shaded_poly_line(&mut self, rgb_1: u32, transparent: bool) {
@@ -484,27 +488,32 @@ impl Renderer {
             }
             let vertex_n = self.get_parameter();
         }
+        unimplemented!("draw shaded poly line");
     }
 
     fn draw_rectangle(&mut self, rgb: u32, transparent: bool) {
         let top_left = self.get_parameter();
         let size = self.get_parameter();
 
+        unimplemented!("rect");
     }
 
     fn draw_fixed_rectangle(&mut self, rgb: u32, transparent: bool, size: usize) {
         let top_left = self.get_parameter();
+        unimplemented!("draw fixed rect");
     }
 
     fn draw_tex_rectangle(&mut self, rgb: Option<u32>, transparent: bool) {
         let top_left = self.get_parameter();
         let tex_info = self.get_parameter();
         let size = self.get_parameter();
+        unimplemented!("draw tex rect");
     }
 
     fn draw_tex_fixed_rectangle(&mut self, rgb: Option<u32>, transparent: bool, size: usize) {
         let top_left = self.get_parameter();
         let tex_info = self.get_parameter();
+        unimplemented!("draw tex fixed rect");
     }
 
     // Data copy
@@ -682,6 +691,7 @@ trait RendererImpl {
     fn set_draw_area_offset(&mut self, x: i16, y: i16);
     fn set_mask_settings(&mut self, set_mask_bit: bool, check_mask_bit: bool);
 
+    fn fill_rectangle(&mut self, color: Color, top_left: Coord, size: Size);
     fn draw_triangle(&mut self, vertices: &[Vertex], transparent: bool);
     fn draw_triangle_tex(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool);
 }
@@ -700,9 +710,9 @@ impl Coord {
         }
     }
 
-    /// Get byte index into VRAM.
+    /// Get halfword index into VRAM.
     fn get_vram_idx(&self) -> usize {
-        (self.x as usize) * 2 + (self.y as usize) * 2048
+        (self.x as usize) + (self.y as usize) * 1024
     }
 }
 
@@ -821,12 +831,12 @@ impl TexInfo {
         let palette = texcoord_1 >> 16;
         let page = texcoord_2 >> 16;
         let tex_mode = match (page >> 7) & 0x3 {
-            0 => TexMode::Palette4((palette & 0x3F) * 16 * 2, (palette >> 6) & 0x1FF),
-            1 => TexMode::Palette8((palette & 0x3F) * 16 * 2, (palette >> 6) & 0x1FF),
+            0 => TexMode::Palette4((palette & 0x3F) * 16, (palette >> 6) & 0x1FF),
+            1 => TexMode::Palette8((palette & 0x3F) * 16, (palette >> 6) & 0x1FF),
             _ => TexMode::Direct,
         };
         Self {
-            s_base: (page & 0xF) * 64 * 2,
+            s_base: (page & 0xF) * 64,
             t_base: (page & 0x10) << 4,
             tex_mode,
         }

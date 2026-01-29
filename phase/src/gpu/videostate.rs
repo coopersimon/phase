@@ -190,7 +190,6 @@ impl StateMachine {
                         self.v_count = 0;
                         self.state = Drawing;
                         self.toggle_interlace();
-                        println!("interlace mode: {:?}", self.interlace);
                         GPUClockRes::exit_v_blank(dots)
                     }
                 } else {
