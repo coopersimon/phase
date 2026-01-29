@@ -8,5 +8,5 @@ bitflags = "2.10"
 crossbeam-channel = "0.5"
 
 [dependencies.mips]
-#git = "https://github.com/coopersimon/e-mips"
-path = "../../e-mips"
+git = "https://github.com/coopersimon/e-mips"
+#path = "../../e-mips"
