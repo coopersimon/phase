@@ -298,6 +298,13 @@ impl Renderer {
         let texcoord_2 = self.get_parameter();
         let vertex_3 = self.get_parameter();
         let texcoord_3 = self.get_parameter();
+        let vertices = [
+            Vertex::from_xy(vertex_1).set_tex(texcoord_1),
+            Vertex::from_xy(vertex_2).set_tex(texcoord_2),
+            Vertex::from_xy(vertex_3).set_tex(texcoord_3),
+        ];
+        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        self.renderer.draw_triangle_tex(&vertices, &tex_info, transparent);
     }
 
     fn draw_textured_blended_tri(&mut self, rgb: u32, transparent: bool) {
@@ -307,6 +314,13 @@ impl Renderer {
         let texcoord_2 = self.get_parameter();
         let vertex_3 = self.get_parameter();
         let texcoord_3 = self.get_parameter();
+        let vertices = [
+            Vertex::from_xy(vertex_1).set_col(rgb).set_tex(texcoord_1),
+            Vertex::from_xy(vertex_2).set_col(rgb).set_tex(texcoord_2),
+            Vertex::from_xy(vertex_3).set_col(rgb).set_tex(texcoord_3),
+        ];
+        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        self.renderer.draw_triangle_tex(&vertices, &tex_info, transparent);
     }
 
     fn draw_shaded_tri(&mut self, rgb_1: u32, transparent: bool) {
@@ -332,6 +346,13 @@ impl Renderer {
         let rgb_3 = self.get_parameter();
         let vertex_3 = self.get_parameter();
         let texcoord_3 = self.get_parameter();
+        let vertices = [
+            Vertex::from_xy(vertex_1).set_col(rgb_1).set_tex(texcoord_1),
+            Vertex::from_xy(vertex_2).set_col(rgb_2).set_tex(texcoord_2),
+            Vertex::from_xy(vertex_3).set_col(rgb_3).set_tex(texcoord_3),
+        ];
+        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        self.renderer.draw_triangle_tex(&vertices, &tex_info, transparent);
     }
 
     /// Draw a quad.
@@ -359,6 +380,15 @@ impl Renderer {
         let texcoord_3 = self.get_parameter();
         let vertex_4 = self.get_parameter();
         let texcoord_4 = self.get_parameter();
+        let vertices = [
+            Vertex::from_xy(vertex_1).set_tex(texcoord_1),
+            Vertex::from_xy(vertex_2).set_tex(texcoord_2),
+            Vertex::from_xy(vertex_3).set_tex(texcoord_3),
+            Vertex::from_xy(vertex_4).set_tex(texcoord_4),
+        ];
+        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        self.renderer.draw_triangle_tex(&vertices[0..3], &tex_info, transparent);
+        self.renderer.draw_triangle_tex(&vertices[1..4], &tex_info, transparent);
     }
 
     fn draw_textured_blended_quad(&mut self, rgb: u32, transparent: bool) {
@@ -370,6 +400,15 @@ impl Renderer {
         let texcoord_3 = self.get_parameter();
         let vertex_4 = self.get_parameter();
         let texcoord_4 = self.get_parameter();
+        let vertices = [
+            Vertex::from_xy(vertex_1).set_col(rgb).set_tex(texcoord_1),
+            Vertex::from_xy(vertex_2).set_col(rgb).set_tex(texcoord_2),
+            Vertex::from_xy(vertex_3).set_col(rgb).set_tex(texcoord_3),
+            Vertex::from_xy(vertex_4).set_col(rgb).set_tex(texcoord_4),
+        ];
+        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        self.renderer.draw_triangle_tex(&vertices[0..3], &tex_info, transparent);
+        self.renderer.draw_triangle_tex(&vertices[1..4], &tex_info, transparent);
     }
 
     fn draw_shaded_quad(&mut self, rgb_1: u32, transparent: bool) {
@@ -402,6 +441,15 @@ impl Renderer {
         let rgb_4 = self.get_parameter();
         let vertex_4 = self.get_parameter();
         let texcoord_4 = self.get_parameter();
+        let vertices = [
+            Vertex::from_xy(vertex_1).set_col(rgb_1).set_tex(texcoord_1),
+            Vertex::from_xy(vertex_2).set_col(rgb_2).set_tex(texcoord_2),
+            Vertex::from_xy(vertex_3).set_col(rgb_3).set_tex(texcoord_3),
+            Vertex::from_xy(vertex_4).set_col(rgb_4).set_tex(texcoord_4),
+        ];
+        let tex_info = TexInfo::new(texcoord_1, texcoord_2);
+        self.renderer.draw_triangle_tex(&vertices[0..3], &tex_info, transparent);
+        self.renderer.draw_triangle_tex(&vertices[1..4], &tex_info, transparent);
     }
 
     // Lines
@@ -517,7 +565,11 @@ impl Renderer {
     }
 
     fn texture_window_setting(&mut self, param: u32) {
-        // TODO.
+        let mask_s = ((param & 0x1F) as u8) << 3;
+        let mask_t = (((param >> 5) & 0x1F) as u8) << 3;
+        let offset_s = (((param >> 10) & 0x1F) as u8) << 3;
+        let offset_t = (((param >> 15) & 0x1F) as u8) << 3;
+        self.renderer.set_texture_window(mask_s, mask_t, offset_s, offset_t);
     }
 
     fn set_draw_area_top_left(&mut self, param: u32) {
@@ -624,13 +676,14 @@ trait RendererImpl {
     fn set_display_range_y(&mut self, begin: u32, end: u32);
     fn set_display_resolution(&mut self, res: Size);
 
+    fn set_texture_window(&mut self, mask_s: u8, mask_t: u8, offset_s: u8, offset_t: u8);
     fn set_draw_area_top_left(&mut self, left: u16, top: u16);
     fn set_draw_area_bottom_right(&mut self, right: u16, bottom: u16);
     fn set_draw_area_offset(&mut self, x: i16, y: i16);
     fn set_mask_settings(&mut self, set_mask_bit: bool, check_mask_bit: bool);
 
     fn draw_triangle(&mut self, vertices: &[Vertex], transparent: bool);
-    //fn draw_triangle_tex(&mut self, vertices: &[Vertex], tex_info: TexInfo, transparent: bool);
+    fn draw_triangle_tex(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool);
 }
 
 struct Coord {
@@ -715,6 +768,14 @@ impl Color {
         let b = (self.b >> 3) as u16;
         r | (g << 5) | (b << 10)
     }
+
+    fn blend(&self, other: &Color) -> Color {
+        Color {
+            r: ((self.r as u16) * (other.r as u16) >> 8) as u8,
+            g: ((self.g as u16) * (other.g as u16) >> 8) as u8,
+            b: ((self.b as u16) * (other.b as u16) >> 8) as u8,
+        }
+    }
 }
 
 struct Vertex {
@@ -729,7 +790,7 @@ impl Vertex {
     fn from_xy(xy: u32) -> Self {
         Self {
             coord: Coord::from_xy(xy),
-            col: Color::white(),
+            col: Color { r: 0x80, g: 0x80, b: 0x80 },
             tex_s: 0,
             tex_t: 0,
         }
@@ -750,6 +811,33 @@ impl Vertex {
 }
 
 struct TexInfo {
-    palette: u16,
-    page: u16,
+    s_base: u32,
+    t_base: u32,
+    tex_mode: TexMode,
+}
+
+impl TexInfo {
+    fn new(texcoord_1: u32, texcoord_2: u32) -> Self {
+        let palette = texcoord_1 >> 16;
+        let page = texcoord_2 >> 16;
+        let tex_mode = match (page >> 7) & 0x3 {
+            0 => TexMode::Palette4((palette & 0x3F) * 16 * 2, (palette >> 6) & 0x1FF),
+            1 => TexMode::Palette8((palette & 0x3F) * 16 * 2, (palette >> 6) & 0x1FF),
+            _ => TexMode::Direct,
+        };
+        Self {
+            s_base: (page & 0xF) * 64 * 2,
+            t_base: (page & 0x10) << 4,
+            tex_mode,
+        }
+    }
+}
+
+enum TexMode {
+    /// 4 bpp with palette
+    Palette4(u32, u32),
+    /// 8 bpp with palette
+    Palette8(u32, u32),
+    /// RGB-15
+    Direct,
 }

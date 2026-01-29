@@ -247,7 +247,7 @@ impl ApplicationHandler for App {
         self.console.run_cpu();
 
         let window_attrs = Window::default_attributes()
-            .with_inner_size(Size::Logical(LogicalSize{width: 320.0, height: 240.0}))
+            .with_inner_size(Size::Logical(LogicalSize{width: 640.0, height: 480.0}))
             .with_title("Phase");
         let window = std::sync::Arc::new(event_loop.create_window(window_attrs).unwrap());
 

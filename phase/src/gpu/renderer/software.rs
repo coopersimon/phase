@@ -1,5 +1,5 @@
 use super::{
-    RendererImpl, Coord, Size, Color, Vertex
+    RendererImpl, Coord, Size, Color, Vertex, TexInfo, TexMode
 };
 
 use crate::{
@@ -13,6 +13,13 @@ struct DrawingArea {
     right: u16,
 }
 
+struct TextureWindow {
+    mask_s: u8,
+    mask_t: u8,
+    offset_s: u8,
+    offset_t: u8,
+}
+
 /// Software implementation of rendering functions
 /// for the PlayStation GPU.
 pub struct SoftwareRenderer {
@@ -24,6 +31,7 @@ pub struct SoftwareRenderer {
     frame_pos: Coord,
     drawing_area: DrawingArea,
     draw_offset: (i16, i16),
+    tex_window: TextureWindow,
 }
 
 impl SoftwareRenderer {
@@ -36,6 +44,7 @@ impl SoftwareRenderer {
             frame_pos: Coord { x: 0, y: 0 },
             drawing_area: DrawingArea { top: 0, bottom: 0, left: 0, right: 0 },
             draw_offset: (0, 0),
+            tex_window: TextureWindow { mask_s: 0, mask_t: 0, offset_s: 0, offset_t: 0 }
         }
     }
 }
@@ -123,6 +132,13 @@ impl RendererImpl for SoftwareRenderer {
         self.resolution = res;
     }
 
+    fn set_texture_window(&mut self, mask_s: u8, mask_t: u8, offset_s: u8, offset_t: u8) {
+        self.tex_window.mask_s = mask_s;
+        self.tex_window.mask_t = mask_t;
+        self.tex_window.offset_s = offset_s;
+        self.tex_window.offset_t = offset_t;
+    }
+
     fn set_draw_area_top_left(&mut self, left: u16, top: u16) {
         self.drawing_area.left = left;
         self.drawing_area.top = top;
@@ -143,6 +159,58 @@ impl RendererImpl for SoftwareRenderer {
     }
 
     fn draw_triangle(&mut self, vertices: &[Vertex], transparent: bool) {
+        self.rasterize_triangle(vertices, |_: &Self, line: &Line| {
+            Some(line.get_color())
+        });
+    }
+
+    fn draw_triangle_tex(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool) {
+        self.rasterize_triangle(vertices, |renderer: &Self, line: &Line| {
+            let (tex_s, tex_t) = line.get_tex_coords();
+            let tex_s = (tex_s & !renderer.tex_window.mask_s) | (renderer.tex_window.mask_s & renderer.tex_window.offset_s);
+            let tex_t = (tex_t & !renderer.tex_window.mask_t) | (renderer.tex_window.mask_t & renderer.tex_window.offset_t);
+            let t = tex_t as u32 + tex_info.t_base;
+            let tex_color = match tex_info.tex_mode {
+                TexMode::Palette4(x, y) => {
+                    let s = (tex_s as u32 / 2) + tex_info.s_base;
+                    let tex_addr = t * 2048 + s;
+                    let data = renderer.vram.read_byte(tex_addr);
+                    let palette_idx = if tex_s & 1 == 1 {
+                        data >> 4
+                    } else {
+                        data & 0xF
+                    } as u32;
+                    //println!("s: {:X} t: {:X} addr: {:X} idx: {:X}", line.tex_s, line.tex_t, tex_addr, palette_idx);
+                    let palette_addr = y * 2048 + x + palette_idx;
+                    renderer.vram.read_halfword(palette_addr)
+                },
+                TexMode::Palette8(x, y) => {
+                    let s = (tex_s as u32) + tex_info.s_base;
+                    let tex_addr = t * 2048 + s;
+                    let data = renderer.vram.read_byte(tex_addr);
+                    let palette_idx = data as u32;
+                    let palette_addr = y * 2048 + x + palette_idx;
+                    renderer.vram.read_halfword(palette_addr)
+                },
+                TexMode::Direct => {
+                    let s = (tex_s as u32) * 2 + tex_info.s_base;
+                    let tex_addr = t * 2048 + s;
+                    renderer.vram.read_halfword(tex_addr)
+                }
+            };
+            if tex_color == 0 {
+                None
+            } else {
+                let frag_color = line.get_color();
+                Some(frag_color.blend(&Color::from_rgb15(tex_color)))
+            }
+        });
+    }
+}
+
+// Internal
+impl SoftwareRenderer {
+    fn rasterize_triangle<F: Fn(&Self, &Line) -> Option<Color>>(&mut self, vertices: &[Vertex], raster_f: F) {
         let mut min_y = std::u16::MAX;
         let mut max_y = std::u16::MIN;
         println!("Draw triangle:");
@@ -155,6 +223,8 @@ impl RendererImpl for SoftwareRenderer {
             panic!("no intersection points found"); // TODO: just return?
             return;
         };
+        //println!("Line 0 (tex) {:X},{:X} => {:X},{:X}", lines.left.tex_s, lines.left.tex_t, lines.right.tex_s, lines.right.tex_t);
+        // TODO: clip at view bounds
         for y in min_y..lines.max_y {
             let left = lines.left.get_x();
             let right = lines.right.get_x();
@@ -162,9 +232,10 @@ impl RendererImpl for SoftwareRenderer {
                 let line_addr = (y as u32) * 2048;
                 let mut line = Line::from_lines(&lines.left, &lines.right);
                 for x in left..right {
-                    let col = line.get_rgb15();
-                    let addr = line_addr + (x as u32 * 2);
-                    self.vram.write_halfword(addr, col);
+                    if let Some(col) = raster_f(self, &line) {
+                        let addr = line_addr + (x as u32 * 2);
+                        self.vram.write_halfword(addr, col.to_rgb15());
+                    }
                     line.inc();
                 }
             }
@@ -175,19 +246,18 @@ impl RendererImpl for SoftwareRenderer {
         // TODO: validate that we get more if min_y < max_y
         // Also: we kind of want to _replace_ one of our lines (either left or right?)
         if let Some(mut lines) = Self::get_intersection_points(vertices, min_y) {
-            //println!("  Draw2 {} => {}", min_y, lines.max_y);
             // Continue drawing.
             for y in min_y..lines.max_y {
                 let left = lines.left.get_x();
                 let right = lines.right.get_x();
-                //println!("    Draw x {} => {}", left, right);
                 if left != right {
                     let line_addr = (y as u32) * 2048;
                     let mut line = Line::from_lines(&lines.left, &lines.right);
                     for x in left..right {
-                        let col = line.get_rgb15();
-                        let addr = line_addr + (x as u32 * 2);
-                        self.vram.write_halfword(addr, col);
+                        if let Some(col) = raster_f(self, &line) {
+                            let addr = line_addr + (x as u32 * 2);
+                            self.vram.write_halfword(addr, col.to_rgb15());
+                        }
                         line.inc();
                     }
                 }
@@ -196,10 +266,7 @@ impl RendererImpl for SoftwareRenderer {
             }
         };
     }
-}
 
-// Internal
-impl SoftwareRenderer {
     fn get_intersection_points(vertices: &[Vertex], line: u16) -> Option<Lines> {
         let mut left: Option<Line> = None;
         let mut right: Option<Line> = None;
@@ -262,11 +329,17 @@ struct Line {
     g: i32,
     b_gradient: i32,
     b: i32,
+    tex_s_gradient: i32,
+    tex_s: i32,
+    tex_t_gradient: i32,
+    tex_t: i32,
 }
 
 impl Line {
     fn from_vertices(top: &Vertex, bottom: &Vertex) -> Self {
         let gradient = (1 << 16) / ((bottom.coord.y - top.coord.y) as i32);
+        let tex_s_diff = bottom.tex_s as i32 - top.tex_s as i32;
+        let tex_t_diff = bottom.tex_t as i32 - top.tex_t as i32;
         Self {
             x_gradient: gradient * (bottom.coord.x as i32 - top.coord.x as i32),
             x: (top.coord.x as i32) << 16,
@@ -276,32 +349,47 @@ impl Line {
             g: (top.col.g as i32) << 16,
             b_gradient: gradient * (bottom.col.b as i32 - top.col.b as i32),
             b: (top.col.b as i32) << 16,
+            tex_s_gradient: gradient * tex_s_diff,
+            tex_s: (top.tex_s as i32) << 16,
+            tex_t_gradient: gradient * tex_t_diff,
+            tex_t: (top.tex_t as i32) << 16,
         }
     }
 
     fn from_lines(left: &Line, right: &Line) -> Self {
         let gradient = (1 << 16) / ((right.get_x() - left.get_x()) as i32);
+        let tex_s_diff = (right.tex_s - left.tex_s) >> 16;
+        let tex_t_diff = (right.tex_t - left.tex_t) >> 16;
         Self {
             x_gradient: 0,
             x: 0,
-            r_gradient: gradient * ((right.r as i32 - left.r as i32) >> 16),
-            r: left.r as i32,
-            g_gradient: gradient * ((right.g as i32 - left.g as i32) >> 16),
-            g: left.g as i32,
-            b_gradient: gradient * ((right.b as i32 - left.b as i32) >> 16),
-            b: left.b as i32,
+            r_gradient: gradient * ((right.r - left.r) >> 16),
+            r: left.r,
+            g_gradient: gradient * ((right.g - left.g) >> 16),
+            g: left.g,
+            b_gradient: gradient * ((right.b - left.b) >> 16),
+            b: left.b,
+            tex_s_gradient: gradient * tex_s_diff,
+            tex_s: left.tex_s,
+            tex_t_gradient: gradient * tex_t_diff,
+            tex_t: left.tex_t,
         }
     }
 
     fn get_x(&self) -> u16 {
-        (self.x >> 16) as u16
+        ((self.x + 0x8000) >> 16) as u16
     }
-    fn get_rgb15(&self) -> u16 {
+    fn get_color(&self) -> Color {
         Color {
             r: (self.r >> 16) as u8,
             g: (self.g >> 16) as u8,
             b: (self.b >> 16) as u8,
-        }.to_rgb15()
+        }
+    }
+    fn get_tex_coords(&self) -> (u8, u8) {
+        let tex_s = ((self.tex_s + 0x8000) >> 16) as u8;
+        let tex_t = ((self.tex_t + 0x8000) >> 16) as u8;
+        (tex_s, tex_t)
     }
 
     /// Advance internal state.
@@ -310,6 +398,8 @@ impl Line {
         self.r += self.r_gradient;
         self.g += self.g_gradient;
         self.b += self.b_gradient;
+        self.tex_s += self.tex_s_gradient;
+        self.tex_t += self.tex_t_gradient;
     }
 }
 
