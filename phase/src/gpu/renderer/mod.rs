@@ -145,8 +145,8 @@ impl Renderer {
 
     fn display_vram_offset(&mut self, offset: u32) {
         let coord = Coord {
-            x: (offset & 0x3FF) as u16,
-            y: ((offset >> 10) & 0x1FF) as u16
+            x: (offset & 0x3FF) as i16,
+            y: ((offset >> 10) & 0x1FF) as i16
         };
         self.renderer.set_display_offset(coord);
     }
@@ -593,14 +593,14 @@ impl Renderer {
     }
 
     fn set_draw_area_top_left(&mut self, param: u32) {
-        let left = (param & 0x3FF) as u16;
-        let top = ((param >> 10) & 0x1FF) as u16;
+        let left = (param & 0x3FF) as i16;
+        let top = ((param >> 10) & 0x1FF) as i16;
         self.renderer.set_draw_area_top_left(left, top);
     }
 
     fn set_draw_area_bottom_right(&mut self, param: u32) {
-        let right = (param & 0x3FF) as u16;
-        let bottom = ((param >> 10) & 0x1FF) as u16;
+        let right = (param & 0x3FF) as i16;
+        let bottom = ((param >> 10) & 0x1FF) as i16;
         self.renderer.set_draw_area_bottom_right(right, bottom);
     }
 
@@ -697,8 +697,8 @@ trait RendererImpl {
     fn set_display_resolution(&mut self, res: Size);
 
     fn set_texture_window(&mut self, mask_s: u8, mask_t: u8, offset_s: u8, offset_t: u8);
-    fn set_draw_area_top_left(&mut self, left: u16, top: u16);
-    fn set_draw_area_bottom_right(&mut self, right: u16, bottom: u16);
+    fn set_draw_area_top_left(&mut self, left: i16, top: i16);
+    fn set_draw_area_bottom_right(&mut self, right: i16, bottom: i16);
     fn set_draw_area_offset(&mut self, x: i16, y: i16);
     fn set_mask_settings(&mut self, set_mask_bit: bool, check_mask_bit: bool);
 
@@ -710,16 +710,16 @@ trait RendererImpl {
 }
 
 struct Coord {
-    x: u16,
-    y: u16,
+    x: i16,
+    y: i16,
 }
 
 impl Coord {
     #[inline(always)]
     fn from_xy(xy: u32) -> Self {
         Self {
-            x: (xy & 0xFFFF) as u16,
-            y: ((xy >> 16) & 0xFFFF) as u16,
+            x: (xy & 0xFFFF) as i16,
+            y: ((xy >> 16) & 0xFFFF) as i16,
         }
     }
 
