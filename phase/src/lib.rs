@@ -99,6 +99,14 @@ impl PlayStation {
         };
         controller.press_button(button, pressed);
     }
+
+    pub fn insert_cd(&mut self, path: PathBuf) {
+        self.input.push(io::InputMessage::CDInserted { path });
+    }
+
+    pub fn remove_cd(&mut self) {
+        self.input.push(io::InputMessage::CDRemoved);
+    }
 }
 
 /// Information for frame.

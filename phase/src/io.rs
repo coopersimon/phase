@@ -1,5 +1,5 @@
-
-use super::{Frame, Port, ControllerType};
+use std::path::PathBuf;
+use super::{Frame, Port};
 
 use crossbeam_channel::{
     Sender, Receiver, unbounded
@@ -89,6 +89,10 @@ impl BusIO {
 
 
 pub enum InputMessage {
+    CDInserted {
+        path: PathBuf,
+    },
+    CDRemoved,
     ControllerConnected {
         port: Port,
         state: crate::peripheral::controller::ControllerState,

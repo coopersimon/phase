@@ -136,6 +136,14 @@ impl MemBus {
         for message in input {
             use InputMessage::*;
             match message {
+                CDInserted { path } => {
+                    self.cdrom.insert_disc(Some(&path)).expect("error inserting CD");
+                    println!("CD inserted: {:?}", path.to_str());
+                },
+                CDRemoved => {
+                    self.cdrom.insert_disc(None).expect("error removing CD");
+                    println!("CD removed");
+                },
                 ControllerConnected { port, state } => {
                     println!("Connected controller to port {:?}", port);
                     self.peripheral.set_controller_state(port, state);
