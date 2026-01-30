@@ -1,7 +1,14 @@
+pub mod controller;
 
 use std::collections::VecDeque;
 
-use crate::{interrupt::Interrupt, utils::{bits::*, interface::MemInterface}};
+use crate::{
+    Port,
+    interrupt::Interrupt,
+    utils::{bits::*, interface::MemInterface}
+};
+
+use controller::ControllerState;
 
 /// Handles the controllers and memory cards.
 pub struct PeripheralPort {
@@ -16,6 +23,11 @@ pub struct PeripheralPort {
     out_fifo: VecDeque<u8>,
     transfer_mode: TransferMode,
     transfer_active: bool,
+    irq_countdown: usize,
+
+    // Devices:
+    port_1_controller: [u16; 4],
+    port_2_controller: [u16; 4],
 }
 
 impl PeripheralPort {
@@ -32,19 +44,17 @@ impl PeripheralPort {
             out_fifo: VecDeque::new(),
             transfer_mode: TransferMode::None,
             transfer_active: false,
+            irq_countdown: 0,
+
+            port_1_controller: [0xFFFF; 4],
+            port_2_controller: [0xFFFF; 4],
         }
     }
 
     pub fn clock(&mut self, cycles: usize) -> Interrupt {
-        let clocks = (cycles * 2) as u32;
+        let clocks = cycles as u32;
         if self.baudrate_timer <= clocks {
-            let multiply_factor = match (self.mode & JoypadMode::BaudrateReloadFactor).bits() {
-                2 => 16,
-                3 => 32,
-                _ => 1
-            };
-            let reload = self.baudrate_reload * multiply_factor;
-            self.baudrate_timer += reload - clocks;
+            self.reload_baudrate(clocks - self.baudrate_timer);
             if self.transfer_active {
                 self.process_data();
             }
@@ -52,11 +62,30 @@ impl PeripheralPort {
             self.baudrate_timer -= clocks;
         }
 
-        if self.status.contains(JoypadStatus::IRQ) {
-            // TODO: edge-triggered..?
-            Interrupt::Peripheral
+        if self.irq_countdown > 0 {
+            self.irq_countdown = self.irq_countdown.saturating_sub(cycles);
+            if self.irq_countdown == 0 {
+                self.status.insert(JoypadStatus::IRQ);
+                Interrupt::Peripheral
+            } else {
+                Interrupt::empty()
+            }
         } else {
             Interrupt::empty()
+        }
+    }
+
+    pub fn set_controller_state(&mut self, port: Port, state: ControllerState) {
+        match port {
+            Port::One => state.get_binary(&mut self.port_1_controller),
+            Port::Two => state.get_binary(&mut self.port_2_controller),
+        }
+    }
+
+    pub fn clear_controller_state(&mut self, port: Port) {
+        match port {
+            Port::One => self.port_1_controller.fill(0xFFFF),
+            Port::Two => self.port_1_controller.fill(0xFFFF),
         }
     }
 }
@@ -170,11 +199,11 @@ bitflags::bitflags! {
         const JoyNOutput    = bit!(1);
         const TXEnable      = bit!(0);
 
-        const Writable = bits![0, 1, 2, 8, 9, 10, 11, 12, 13];
+        const Writable = bits![0, 2, 8, 9, 10, 11, 12, 13];
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum TransferMode {
     None,
     Controller(u8),
@@ -186,6 +215,7 @@ impl PeripheralPort {
     fn send_data(&mut self, data: u8) {
         self.in_fifo.push_back(data);
         self.transfer_active = true;
+        self.reload_baudrate(0);
     }
 
     fn receive_data(&mut self) -> u32 {
@@ -202,12 +232,8 @@ impl PeripheralPort {
         if !self.out_fifo.is_empty() {
             status.insert(JoypadStatus::RXFifoNotEmpty);
         }
-        /*if self.transfer_active {
-            status.insert(JoypadStatus::TXReady1);
-        } else { // TODO: only if TXEnabled ?
-            status.insert(JoypadStatus::TXReady2);
-        }*/
-        (status.bits() as u32) | (self.baudrate_timer << 11)
+        let current_timer = self.baudrate_timer / 8;
+        (status.bits() as u32) | (current_timer << 11)
     }
 
     fn set_mode(&mut self, data: u16) {
@@ -222,18 +248,16 @@ impl PeripheralPort {
         if control.contains(JoypadControl::Reset) {
             // ? TODO
         }
-        if control.contains(JoypadControl::JoyNOutput) {
-            self.slot_select = if control.contains(JoypadControl::SlotSelect) {1} else {0};
-        }
         self.control = control & JoypadControl::Writable;
         if control.contains(JoypadControl::JoyNOutput) {
-            self.control.insert(JoypadControl::RXEnable);
+            self.slot_select = if control.contains(JoypadControl::SlotSelect) {1} else {0};
+            //self.control.insert(JoypadControl::RXEnable);
         }
         if control.contains(JoypadControl::TXEnable) {
             self.status.insert(JoypadStatus::TXReady1);
             if control.contains(JoypadControl::TXIntEnable) {
                 // TODO: ?
-                self.status.insert(JoypadStatus::IRQ);
+                self.trigger_irq();
             }
         }
     }
@@ -246,12 +270,23 @@ impl PeripheralPort {
 
     fn set_baudrate_reload(&mut self, data: u16) {
         self.baudrate_reload = data as u32;
-        self.baudrate_timer = self.baudrate_reload;
+        self.reload_baudrate(0);
+    }
+
+    fn reload_baudrate(&mut self, offset: u32) {
+        let multiply_factor = match (self.mode & JoypadMode::BaudrateReloadFactor).bits() {
+            2 => 16,
+            3 => 32,
+            _ => 1
+        } * 8; // 8 bits need to be transferred?
+        let reload = self.baudrate_reload * multiply_factor;
+        self.baudrate_timer = reload - offset;
     }
 
     /// When we have clocked enough cycles,
     /// we can process some data.
     fn process_data(&mut self) {
+        self.status.remove(JoypadStatus::AckInputLevel | JoypadStatus::TXReady1);
         let Some(data_in) = self.in_fifo.pop_front() else {
             return;
         };
@@ -269,17 +304,28 @@ impl PeripheralPort {
                 }
             },
             TransferMode::Controller(n) => {
-                match n {
-                    0 => { // ID lo
-                        self.transfer_mode = TransferMode::Controller(1);
-                        self.push_data(0xFF);
+                let controller = if self.control.contains(JoypadControl::SlotSelect) {
+                    &self.port_2_controller
+                } else {
+                    &self.port_1_controller
+                };
+                // TODO: better manage size...
+                let (transfer_mode, data) = match n {
+                    0 => (TransferMode::Controller(1), controller[0].to_le_bytes()[0]),
+                    1 => {
+                        let data = controller[0].to_le_bytes()[1];
+                        if data == 0xFF {
+                            (TransferMode::None, 0xFF)
+                        } else {
+                            (TransferMode::Controller(2), data)
+                        }
                     },
-                    1 => { // ID hi
-                        self.transfer_mode = TransferMode::None;
-                        self.push_data(0xFF);
-                    },
+                    2 => (TransferMode::Controller(3), controller[1].to_le_bytes()[0]),
+                    3 => (TransferMode::None, controller[1].to_le_bytes()[1]),
                     _ => unreachable!()
-                }
+                };
+                self.transfer_mode = transfer_mode;
+                self.push_data(data);
             },
             TransferMode::MemCard(n) => {
                 match n {
@@ -299,23 +345,30 @@ impl PeripheralPort {
                 }
             }
         }
-        if self.control.contains(JoypadControl::AckIntEnable) {
-            self.status.insert(JoypadStatus::IRQ);
+        if self.transfer_mode != TransferMode::None {
+            self.status.insert(JoypadStatus::AckInputLevel);
+            if self.control.contains(JoypadControl::AckIntEnable) {
+                self.trigger_irq();
+            }
+        } else {
+            self.status.insert(JoypadStatus::TXReady2);
         }
-        self.status.insert(JoypadStatus::TXReady2);
     }
 
     fn push_data(&mut self, data: u8) {
-        if self.control.contains(JoypadControl::RXEnable) {
+        //if self.control.contains(JoypadControl::RXEnable) {
             self.out_fifo.push_back(data);
             if self.control.contains(JoypadControl::RXIntEnable) {
                 let rx_int_mode = (self.control & JoypadControl::RXIntMode).bits() >> 8;
                 let out_fifo_len = 1 << rx_int_mode;
                 if self.out_fifo.len() == out_fifo_len {
-                    // TODO: wait..?
-                    self.status.insert(JoypadStatus::IRQ);
+                    self.trigger_irq();
                 }
             }
-        }
+        //}
+    }
+
+    fn trigger_irq(&mut self) {
+        self.irq_countdown = 100;
     }
 }

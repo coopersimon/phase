@@ -1,5 +1,5 @@
 
-use super::{Input, Frame};
+use super::{Frame, Port, ControllerType};
 
 use crossbeam_channel::{
     Sender, Receiver, unbounded
@@ -7,6 +7,8 @@ use crossbeam_channel::{
 use std::sync::{
     Arc, Mutex
 };
+
+pub type Input = Box<[InputMessage]>;
 
 /// Syncing and communicating with the real-time system.
 /// 
@@ -44,8 +46,8 @@ impl IO {
     }
 
     /// Blocks until a frame is ready from the system.
-    pub fn get_frame(&mut self, input: &Input, frame: &mut Frame) {
-        if self.input_tx.send(input.clone()).is_ok() {
+    pub fn get_frame(&mut self, input: Input, frame: &mut Frame) {
+        if self.input_tx.send(input).is_ok() {
             if self.frame_rx.recv().is_ok() {
                 let frame_data = self.frame.lock().unwrap();
                 frame.size = frame_data.size;
@@ -76,11 +78,26 @@ impl BusIO {
             // The channel has been dropped. This either means
             // that the program is about to close, or that we are in
             // debug mode.
-            Input::empty()
+            Box::new([])
         }
     }
 
     pub fn clone_frame_arc(&self) -> Arc<Mutex<Frame>> {
         self.frame.clone()
     }
+}
+
+
+pub enum InputMessage {
+    ControllerConnected {
+        port: Port,
+        state: crate::peripheral::controller::ControllerState,
+    },
+    ControllerDisconnected {
+        port: Port,
+    },
+    ControllerInput {
+        port: Port,
+        state: crate::peripheral::controller::ControllerState,
+    },
 }

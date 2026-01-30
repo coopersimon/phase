@@ -12,7 +12,7 @@ pub use dma::DMADevice;
 
 use crate::PlayStationConfig;
 use crate::gpu::GPU;
-use crate::io::BusIO;
+use crate::io::{BusIO, InputMessage};
 use crate::spu::SPU;
 use crate::utils::interface::MemInterface;
 use crate::interrupt::InterruptControl;
@@ -132,8 +132,23 @@ impl MemBus {
     fn begin_frame(&mut self) {
         // Sync up with the GPU.
         self.gpu.get_frame();
-        let _input = self.io.send_frame();
-        // TODO: write input...
+        let input = self.io.send_frame();
+        for message in input {
+            use InputMessage::*;
+            match message {
+                ControllerConnected { port, state } => {
+                    println!("Connected controller to port {:?}", port);
+                    self.peripheral.set_controller_state(port, state);
+                },
+                ControllerDisconnected { port } => {
+                    println!("Disconnected controller at port {:?}", port);
+                    self.peripheral.clear_controller_state(port);
+                },
+                ControllerInput { port, state } => {
+                    self.peripheral.set_controller_state(port, state);
+                },
+            }
+        }
     }
 }
 

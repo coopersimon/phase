@@ -245,6 +245,7 @@ impl App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         self.console.run_cpu();
+        self.console.attach_controller(ControllerType::Digital, Port::One);
 
         let window_attrs = Window::default_attributes()
             .with_inner_size(Size::Logical(LogicalSize{width: 640.0, height: 480.0}))
@@ -345,24 +346,25 @@ impl ApplicationHandler for App {
                 self.window.as_ref().unwrap().window.request_redraw();
             },
             WindowEvent::KeyboardInput { device_id: _, event, is_synthetic: _ } => {
-                let _pressed = match event.state {
+                let pressed = match event.state {
                     ElementState::Pressed => true,
                     ElementState::Released => false,
                 };
                 match event.physical_key {
-                    PhysicalKey::Code(KeyCode::KeyX)        => {},
-                    PhysicalKey::Code(KeyCode::KeyZ)        => {},
-                    PhysicalKey::Code(KeyCode::KeyD)        => {},
-                    PhysicalKey::Code(KeyCode::KeyC)        => {},
-                    PhysicalKey::Code(KeyCode::KeyA)        => {},
-                    PhysicalKey::Code(KeyCode::KeyS)        => {},
-                    PhysicalKey::Code(KeyCode::Space)       => {},
-                    PhysicalKey::Code(KeyCode::Enter)       => {},
-                    PhysicalKey::Code(KeyCode::ArrowUp)     => {},
-                    PhysicalKey::Code(KeyCode::ArrowDown)   => {},
-                    PhysicalKey::Code(KeyCode::ArrowLeft)   => {},
-                    PhysicalKey::Code(KeyCode::ArrowRight)  => {},
-                    PhysicalKey::Code(KeyCode::KeyQ)        => {},
+                    PhysicalKey::Code(KeyCode::KeyX)        => self.console.press_button(Port::One, Button::Cross, pressed),
+                    PhysicalKey::Code(KeyCode::KeyZ)        => self.console.press_button(Port::One, Button::Circle, pressed),
+                    PhysicalKey::Code(KeyCode::KeyD)        => self.console.press_button(Port::One, Button::Triangle, pressed),
+                    PhysicalKey::Code(KeyCode::KeyC)        => self.console.press_button(Port::One, Button::Square, pressed),
+                    PhysicalKey::Code(KeyCode::KeyA)        => self.console.press_button(Port::One, Button::L1, pressed),
+                    PhysicalKey::Code(KeyCode::KeyS)        => self.console.press_button(Port::One, Button::R1, pressed),
+                    PhysicalKey::Code(KeyCode::KeyQ)        => self.console.press_button(Port::One, Button::L2, pressed),
+                    PhysicalKey::Code(KeyCode::KeyW)        => self.console.press_button(Port::One, Button::R2, pressed),
+                    PhysicalKey::Code(KeyCode::Space)       => self.console.press_button(Port::One, Button::Select, pressed),
+                    PhysicalKey::Code(KeyCode::Enter)       => self.console.press_button(Port::One, Button::Start, pressed),
+                    PhysicalKey::Code(KeyCode::ArrowUp)     => self.console.press_button(Port::One, Button::DUp, pressed),
+                    PhysicalKey::Code(KeyCode::ArrowDown)   => self.console.press_button(Port::One, Button::DDown, pressed),
+                    PhysicalKey::Code(KeyCode::ArrowLeft)   => self.console.press_button(Port::One, Button::DLeft, pressed),
+                    PhysicalKey::Code(KeyCode::ArrowRight)  => self.console.press_button(Port::One, Button::DRight, pressed),
                     _ => {},
                 }
             },
