@@ -8,25 +8,35 @@ use std::{
     path::Path
 };
 
-use bitflags::Flags;
 use mips::mem::Data;
 
 use crate::{interrupt::Interrupt, mem::DMADevice};
 use crate::utils::{
     bits::*,
-    bcd::to_bcd,
+    bcd::*,
     interface::MemInterface
 };
 use std::collections::VecDeque;
 
-const DISC_BUFFER_SIZE: u64 = 64 * 1024; // Load 64kB chunks.
+/// CD sectors are 2352 bytes.
+const SECTOR_SIZE: u64 = 2352;
+/// Hold 1 second of data in the memory buffer.
+const DISC_BUFFER_SIZE: u64 = 75 * SECTOR_SIZE;
+/// Each sector starts with 12 sync bytes.
+const SECTOR_SYNC_BYTES: u64 = 12;
+/// Each sector starts with a 24 byte header, including
+/// sync bytes, address, mode
+const SECTOR_HEADER: u64 = 24;
+/// Each sector contains 2048 bytes of data.
+const SECTOR_DATA: u64 = 2048;
 
 /// CD-ROM reader.
 pub struct CDROM {
     disc: Option<File>,
-    offset: u64,
     buffer: Vec<u8>,
-    buffer_n: u64, // Chunk count.
+    buffer_file_offset: u64,
+    seek_file_offset: u64,
+    sector_offset: u64,
 
     status: Status,
     int_enable: IntFlags,
@@ -46,20 +56,21 @@ pub struct CDROM {
     loc: DriveLoc,
 
     counter: usize,
-    // TODO: instead of pending_int, we should use clock properly.
-    //   and only give a result after a certain amount of time.
-    pending_int: IntFlags,
+    command: u8,
+    response_count: u8,
+    data_fifo_size: u64,
 }
 
 impl CDROM {
     pub fn new() -> Self {
         Self {
             disc: None,
-            offset: 0,
             buffer: vec![0; DISC_BUFFER_SIZE as usize],
-            buffer_n: 0,
+            buffer_file_offset: u64::MAX,
+            seek_file_offset: 0,
+            sector_offset: 0,
 
-            status: Status::ParamFifoEmpty,
+            status: Status::ParamFifoEmpty | Status::ParamFifoFull,
             int_enable: IntFlags::Unused,
             int_flags: IntFlags::Unused,
             request: Request::empty(),
@@ -74,10 +85,12 @@ impl CDROM {
 
             drive_status: DriveStatus::empty(),
             mode: DriveMode::empty(),
-            loc: DriveLoc { minute: 0, second: 0, frame: 0 },
+            loc: DriveLoc { minute: 0, second: 0, sector: 0 },
 
             counter: 0,
-            pending_int: IntFlags::empty(),
+            command: 0,
+            response_count: 0,
+            data_fifo_size: 0,
         }
     }
 
@@ -87,8 +100,10 @@ impl CDROM {
         if let Some(path) = path {
             let disc_file = File::open(path)?;
             self.disc = Some(disc_file);
-            self.offset = 0;
-            self.read_from_file(0);
+            self.buffer_file_offset = u64::MAX;
+            self.seek_file_offset = 0;
+            self.sector_offset = 0;
+            self.read_from_file();
         } else {
             self.disc = None
         }
@@ -102,15 +117,14 @@ impl CDROM {
         if self.counter > 0 {
             self.counter = self.counter.saturating_sub(cycles);
             if self.counter == 0 {
-                self.status.insert(Status::ResFifoEmpty);
-                self.int_flags.insert(self.pending_int);
-                self.pending_int.clear();
-                if self.check_irq() {
-                    return Interrupt::CDROM;
-                }
+                self.exec_command();
             }
         }
-        Interrupt::empty()
+        if self.check_irq() {
+            Interrupt::CDROM
+        } else {
+            Interrupt::empty()
+        }
     }
 }
 
@@ -127,12 +141,12 @@ impl MemInterface for CDROM {
             },
             _ => panic!("invalid CDROM addr {:X}", addr)
         };
-        println!("read cd {:X}: {:X}", addr, data);
+        //println!("read cd {:X}.{}: {:X}", addr, self.index(), data);
         data
     }
 
     fn write_byte(&mut self, addr: u32, data: u8) {
-        println!("write cd {:X}: {:X}", addr, data);
+        //println!("write cd {:X}.{}: {:X}", addr, self.index(), data);
         match addr {
             0x1F80_1800 => self.write_status(data),
             0x1F80_1801 => match self.index() {
@@ -199,8 +213,6 @@ impl DMADevice for CDROM {
             self.read_data(),
             self.read_data()
         ]);
-        self.pending_int.remove(IntFlags::Response);
-        self.pending_int.insert(IntFlags::from_bits_truncate(1));
         Data { data, cycles: 23 }
     }
 
@@ -226,6 +238,7 @@ bitflags::bitflags! {
     #[derive(Clone, Copy)]
     struct IntFlags: u8 {
         const Unused        = bits![5, 6, 7];
+        const ResetParamFIFO= bit!(6);
         const CommandStart  = bit!(4);
         const Unknown       = bit!(3);
         const Response      = bits![0, 1, 2];
@@ -244,14 +257,6 @@ bitflags::bitflags! {
 // Internal.
 impl CDROM {
     fn check_irq(&mut self) -> bool {
-        /*let irq = (self.int_enable & self.int_flags).intersects(!IntFlags::Unused);
-        if !self.irq_latch {
-            self.irq_latch = irq;
-            irq
-        } else {
-            self.irq_latch = irq;
-            false
-        }*/
         (self.int_enable & self.int_flags).intersects(!IntFlags::Unused)
     }
 
@@ -265,9 +270,138 @@ impl CDROM {
     }
 
     fn write_command(&mut self, data: u8) {
-        self.counter = 100; // wait some arbitrary amount of time TODO: make this more accurate
-        println!("command: {:X}", data);
-        let res = match data {
+        self.counter = 50000; // wait some arbitrary amount of time TODO: make this more accurate
+        self.response_count = 0;
+        self.command = data;
+        self.status.insert(Status::Busy);
+    }
+
+    fn write_parameter(&mut self, data: u8) {
+        if self.param_fifo.len() >= 16 {
+            panic!("param fifo len too long");
+        }
+        self.param_fifo.push_back(data);
+        self.status.remove(Status::ParamFifoEmpty);
+        self.status.set(Status::ParamFifoFull, self.param_fifo.len() < 16);
+    }
+
+    fn read_parameter(&mut self) -> DriveResult<u8> {
+        let param = self.param_fifo.pop_front();
+        if let Some(param) = param {
+            self.status.set(Status::ParamFifoEmpty, self.param_fifo.is_empty());
+            if self.param_fifo.len() < 16 {
+                self.status.insert(Status::ParamFifoFull);
+            }
+            Ok(param)
+        } else {
+            self.drive_status.insert(DriveStatus::Error);
+            Err(DriveError::MissingParam)
+        }
+    }
+
+    fn write_request(&mut self, data: u8) {
+        self.request = Request::from_bits_truncate(data);
+    }
+
+    fn set_int_enable(&mut self, data: u8) {
+        self.int_enable = IntFlags::from_bits_truncate(data);
+        self.int_enable.insert(IntFlags::Unused);
+    }
+
+    fn set_int_flags(&mut self, data: u8) {
+        let data_in = IntFlags::from_bits_truncate(data);
+        if data_in.contains(IntFlags::ResetParamFIFO) {
+            self.param_fifo.clear();
+            self.status.insert(Status::ParamFifoEmpty);
+            self.status.insert(Status::ParamFifoFull);
+        }
+        self.int_flags.remove(data_in);
+        self.int_flags.insert(IntFlags::Unused);
+    }
+    
+    fn read_response(&mut self) -> u8 {
+        let data = self.response_fifo.pop_front();
+        if self.response_fifo.is_empty() {
+            self.status.remove(Status::ResFifoEmpty);
+        }
+        data.unwrap_or(0)
+    }
+
+    /// Write response from command.
+    /// 
+    /// Also sets interrupt bits. Int should be a value 1-7.
+    fn send_response(&mut self, data: u8, int: u8) {
+        self.response_fifo.push_back(data);
+        self.status.insert(Status::ResFifoEmpty);
+        self.int_flags.remove(IntFlags::Response);
+        self.int_flags.insert(IntFlags::from_bits_truncate(int));
+    }
+
+    /// Indicate first response has been sent.
+    fn first_response(&mut self) {
+        self.counter = 50000;
+        self.response_count += 1;
+    }
+
+    /// Indicate final response has been sent.
+    fn command_complete(&mut self) {
+        self.status.remove(Status::Busy);
+    }
+
+    fn read_data(&mut self) -> u8 {
+        let index = self.sector_offset as usize;
+        let data = self.buffer[index];
+        self.sector_offset += 1;
+        self.data_fifo_size -= 1;
+        if self.data_fifo_size == 0 {
+            self.counter = 50000;
+            self.status.remove(Status::DataFifoEmpty);
+            self.seek_file_offset += SECTOR_SIZE;
+        }
+        data
+    }
+
+    /// Read a sector.
+    fn read_sector(&mut self) {
+        // Check if we need to load from disc.
+        println!("CD read @ {:X}", self.seek_file_offset);
+        self.read_from_file();
+        let start_pos = self.seek_file_offset - self.buffer_file_offset;
+        if self.mode.contains(DriveMode::SectorSize) {
+            self.sector_offset = start_pos + SECTOR_SYNC_BYTES;
+            self.data_fifo_size = SECTOR_SIZE - SECTOR_SYNC_BYTES;
+        } else {
+            self.sector_offset = start_pos + SECTOR_HEADER;
+            self.data_fifo_size = SECTOR_DATA;
+        }
+        self.status.insert(Status::DataFifoEmpty);
+    }
+
+    /// Read from disc into buffer, if necessary.
+    /// 
+    /// It will read the sector pointed to by the offset, in addition to
+    /// other nearby sectors.
+    fn read_from_file(&mut self) {
+        let chunk_num = self.seek_file_offset / DISC_BUFFER_SIZE;
+        let target_file_offset = chunk_num * DISC_BUFFER_SIZE;
+        if self.buffer_file_offset == target_file_offset {
+            // No read necessary.
+            return;
+        }
+        let Some(disc_file) = self.disc.as_mut() else {
+            return;
+        };
+        self.buffer_file_offset = target_file_offset;
+        disc_file.seek(SeekFrom::Start(self.buffer_file_offset)).expect("could not seek in disc");
+        disc_file.read(&mut self.buffer).expect("could not load disc data");
+        println!("CD load from disc @ {:X}", self.buffer_file_offset);
+    }
+
+    /// Execute the current command.
+    fn exec_command(&mut self) {
+        // TODO: command interrupt!
+        println!("cd command: {:X}", self.command);
+        let res = match self.command {
             0x00 => self.sync(),
             0x01 => self.get_stat(),
             0x02 => self.set_loc(),
@@ -291,88 +425,11 @@ impl CDROM {
             0x1B => self.read_s(),
             0x1D => self.get_q(),
             0x1E => self.read_toc(),
-            _ => panic!("unknown CD-ROM command {:X}", data),
+            _ => panic!("unknown CD-ROM command {:X}", self.command),
         };
         if let Err(res) = res {
             self.send_response(res.bits(), 5);
         }
-    }
-
-    fn write_parameter(&mut self, data: u8) {
-        if self.param_fifo.len() >= 16 {
-            panic!("param fifo len too long");
-        }
-        self.param_fifo.push_back(data);
-        self.status.remove(Status::ParamFifoEmpty);
-        self.status.set(Status::ParamFifoFull, self.param_fifo.len() == 16);
-    }
-
-    fn read_parameter(&mut self) -> DriveResult<u8> {
-        let param = self.param_fifo.pop_front();
-        if let Some(param) = param {
-            self.status.set(Status::ParamFifoEmpty, self.param_fifo.is_empty());
-            self.status.remove(Status::ParamFifoFull);
-            Ok(param)
-        } else {
-            self.drive_status.insert(DriveStatus::Error);
-            Err(DriveError::MissingParam)
-        }
-    }
-
-    fn write_request(&mut self, data: u8) {
-        self.request = Request::from_bits_truncate(data);
-    }
-
-    fn set_int_enable(&mut self, data: u8) {
-        self.int_enable = IntFlags::from_bits_truncate(data);
-        self.int_enable.insert(IntFlags::Unused);
-    }
-
-    fn set_int_flags(&mut self, data: u8) {
-        self.int_flags.remove(IntFlags::from_bits_truncate(data));
-        self.int_flags.insert(IntFlags::Unused);
-    }
-    
-    fn read_response(&mut self) -> u8 {
-        let data = self.response_fifo.pop_front();
-        if self.response_fifo.is_empty() {
-            self.status.remove(Status::ResFifoEmpty);
-        }
-        data.unwrap_or(0)
-    }
-
-    /// Write response from command.
-    /// 
-    /// Also sets interrupt bits. Int should be a value 1-7.
-    fn send_response(&mut self, data: u8, int: u8) {
-        self.response_fifo.push_back(data);
-        self.status.insert(Status::ResFifoEmpty);
-        self.pending_int.remove(IntFlags::Response);
-        self.pending_int.insert(IntFlags::from_bits_truncate(int));
-    }
-
-    fn read_data(&mut self) -> u8 {
-        if self.drive_status.contains(DriveStatus::Reading) {
-            let required_buffer = self.offset / DISC_BUFFER_SIZE;
-            if required_buffer != self.buffer_n {
-                self.read_from_file(required_buffer * DISC_BUFFER_SIZE);
-            }
-            let buffer_index = self.offset % DISC_BUFFER_SIZE;
-            self.offset += 1;
-            self.buffer[buffer_index as usize]
-        } else {
-            0
-        }
-    }
-
-    /// Read from disc into buffer.
-    fn read_from_file(&mut self, offset: u64) {
-        let Some(disc_file) = self.disc.as_mut() else {
-            return;
-        };
-        disc_file.seek(SeekFrom::Start(offset)).expect("could not seek in disc");
-        disc_file.read(&mut self.buffer).expect("could not load disc data");
-        self.buffer_n = offset / DISC_BUFFER_SIZE;
     }
 }
 
@@ -421,20 +478,18 @@ bitflags::bitflags! {
 struct DriveLoc {
     minute: u8,
     second: u8,
-    frame: u8, // 75 frames per second
+    sector: u8, // 75 sectors per second
 }
 
 impl DriveLoc {
     fn byte_offset(&self) -> u64 {
-        const FRAME_HEADER: u64 = 24;
-        const FRAME_SIZE: u64 = 2352;
-        const SEC_SIZE: u64 = 75 * FRAME_SIZE;
+        const SEC_SIZE: u64 = 75 * SECTOR_SIZE;
         const MIN_SIZE: u64 = 60 * SEC_SIZE;
         const ROOT_OFFSET: u64 = 2 * SEC_SIZE;
-        let frame_offset = (self.frame as u64) * FRAME_SIZE;
+        let sector_offset = (self.sector as u64) * SECTOR_SIZE;
         let sec_offset = (self.second as u64) * SEC_SIZE;
         let min_offset = (self.minute as u64) * MIN_SIZE;
-        min_offset + sec_offset + frame_offset + FRAME_HEADER - ROOT_OFFSET
+        min_offset + sec_offset + sector_offset - ROOT_OFFSET
     }
 }
 
@@ -443,6 +498,7 @@ type DriveResult<T> = Result<T, DriveError>;
 // Commands.
 impl CDROM {
     fn sync(&mut self) -> DriveResult<()> {
+        self.command_complete();
         Ok(())
     }
 
@@ -450,6 +506,7 @@ impl CDROM {
         let _file = self.read_parameter()?;
         let _channel = self.read_parameter()?;
         self.send_response(self.drive_status.bits(), 3);
+        self.command_complete();
         Ok(())
     }
 
@@ -457,13 +514,23 @@ impl CDROM {
         let mode = self.read_parameter()?;
         self.mode = DriveMode::from_bits_truncate(mode);
         self.send_response(self.drive_status.bits(), 3);
+        self.command_complete();
         Ok(())
     }
 
     fn init(&mut self) -> DriveResult<()> {
-        self.drive_status.insert(DriveStatus::SpindleMotor);
-        self.send_response(self.drive_status.bits(), 3);
-        self.send_response(self.drive_status.bits(), 2);
+        match self.response_count {
+            0 => {
+                self.send_response(self.drive_status.bits(), 3);
+                self.first_response();
+            },
+            _ => {
+                self.mode = DriveMode::SectorSize;
+                self.drive_status.insert(DriveStatus::SpindleMotor);
+                self.send_response(self.drive_status.bits(), 2);
+                self.command_complete();
+            }
+        }
         Ok(())
     }
 
@@ -472,44 +539,80 @@ impl CDROM {
             self.drive_status.insert(DriveStatus::Error);
             Err(DriveError::MissingParam)
         } else {
-            self.drive_status.insert(DriveStatus::SpindleMotor);
-            self.send_response(self.drive_status.bits(), 3);
-            self.send_response(self.drive_status.bits(), 2);
+            match self.response_count {
+                0 => {
+                    self.send_response(self.drive_status.bits(), 3);
+                    self.first_response();
+                },
+                _ => {
+                    self.drive_status.insert(DriveStatus::SpindleMotor);
+                    self.send_response(self.drive_status.bits(), 2);
+                    self.command_complete();
+                }
+            }
             Ok(())
         }
     }
 
     fn stop(&mut self) -> DriveResult<()> {
-        self.drive_status.remove(DriveStatus::ReadBits);
-        self.send_response(self.drive_status.bits(), 3);
-        self.drive_status.remove(DriveStatus::SpindleMotor);
-        self.send_response(self.drive_status.bits(), 2);
+        match self.response_count {
+            0 => {
+                self.drive_status.remove(DriveStatus::ReadBits);
+                self.send_response(self.drive_status.bits(), 3);
+                self.first_response();
+            },
+            _ => {
+                self.drive_status.remove(DriveStatus::SpindleMotor);
+                self.send_response(self.drive_status.bits(), 2);
+                self.command_complete();
+            }
+        }
         Ok(())
     }
 
     fn pause(&mut self) -> DriveResult<()> {
-        //self.send_response(self.drive_status.bits(), 3);
-        self.drive_status.remove(DriveStatus::ReadBits);
-        self.send_response(self.drive_status.bits(), 2);
+        match self.response_count {
+            0 => {
+                self.send_response(self.drive_status.bits(), 3);
+                self.first_response();
+            },
+            _ => {
+                self.drive_status.remove(DriveStatus::ReadBits);
+                self.send_response(self.drive_status.bits(), 2);
+                self.command_complete();
+            }
+        }
         Ok(())
     }
 
     fn set_loc(&mut self) -> DriveResult<()> {
-        self.loc.minute = self.read_parameter()?; // mm
-        self.loc.second = self.read_parameter()?; // ss
-        self.loc.frame = self.read_parameter()?;  // sector / frame
+        self.loc.minute = from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?; // mm
+        self.loc.second = from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?; // ss
+        self.loc.sector = from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?; // sector / frame
+        println!("Seek to {:X},{:X},{:X}", self.loc.minute, self.loc.second, self.loc.sector);
         self.send_response(self.drive_status.bits(), 3);
+        self.command_complete();
         Ok(())
     }
 
     /// Data seek
     fn seek_l(&mut self) -> DriveResult<()> {
-        self.drive_status.remove(DriveStatus::ReadBits);
-        self.drive_status.insert(DriveStatus::Seeking);
-        self.drive_status.insert(DriveStatus::SpindleMotor);
-        self.offset = self.loc.byte_offset();
-        //self.send_response(self.drive_status.bits(), 3);
-        self.send_response(self.drive_status.bits(), 2);
+        match self.response_count {
+            0 => {
+                self.drive_status.remove(DriveStatus::ReadBits);
+                self.drive_status.insert(DriveStatus::Seeking);
+                self.drive_status.insert(DriveStatus::SpindleMotor);
+                self.seek_file_offset = self.loc.byte_offset();
+                //self.sector_offset = file_offset % DISC_BUFFER_SIZE;
+                //self.file_offset = file_offset - self.sector_offset;
+                self.send_response(self.drive_status.bits(), 3);
+                self.first_response();
+            },
+            _ => {
+                self.send_response(self.drive_status.bits(), 2);
+                self.command_complete();
+            }
+        }
         Ok(())
     }
 
@@ -520,12 +623,14 @@ impl CDROM {
         self.drive_status.insert(DriveStatus::SpindleMotor);
         let _byte_offset = self.loc.byte_offset();
         // TODO ? (subchannel Q)
+        self.command_complete();
         Ok(())
     }
 
     fn set_session(&mut self) -> DriveResult<()> {
         // Only support session 1.
         let session = self.read_parameter()?;
+        self.command_complete();
         if session == 0x00 {
             self.send_response(0x03, 5);
             Err(DriveError::InvalidParam)
@@ -542,35 +647,60 @@ impl CDROM {
 
     /// Read with retry
     fn read_n(&mut self) -> DriveResult<()> {
-        // TODO: send first response correctly.
-        //self.send_response(self.drive_status.bits(), 3);
-        self.drive_status.remove(DriveStatus::ReadBits);
-        self.drive_status.insert(DriveStatus::Reading);
-        self.send_response(self.drive_status.bits(), 1);
+        match self.response_count {
+            0 => {
+                self.drive_status.remove(DriveStatus::ReadBits);
+                self.drive_status.insert(DriveStatus::Reading);
+                self.send_response(self.drive_status.bits(), 3);
+                self.first_response();
+            },
+            _ => {
+                self.read_sector();
+                self.send_response(self.drive_status.bits(), 1);
+                self.command_complete();
+            }
+        }
         Ok(())
     }
 
     /// Read without retry
     fn read_s(&mut self) -> DriveResult<()> {
-        // TODO: send first response correctly.
-        //self.send_response(self.drive_status.bits(), 3);
-        self.drive_status.remove(DriveStatus::ReadBits);
-        self.drive_status.insert(DriveStatus::Reading);
-        self.send_response(self.drive_status.bits(), 1);
+        match self.response_count {
+            0 => {
+                self.drive_status.remove(DriveStatus::ReadBits);
+                self.drive_status.insert(DriveStatus::Reading);
+                self.send_response(self.drive_status.bits(), 3);
+                self.first_response();
+            },
+            _ => {
+                self.read_sector();
+                self.send_response(self.drive_status.bits(), 1);
+                self.command_complete();
+            }
+        }
         Ok(())
     }
 
     /// Read table of contents
     fn read_toc(&mut self) -> DriveResult<()> {
         // TODO: .cue file?
-        self.send_response(self.drive_status.bits(), 3);
-        self.send_response(self.drive_status.bits(), 2);
+        match self.response_count {
+            0 => {
+                self.send_response(self.drive_status.bits(), 3);
+                self.first_response();
+            },
+            _ => {
+                self.send_response(self.drive_status.bits(), 2);
+                self.command_complete();
+            }
+        }
         Ok(())
     }
 
     fn get_stat(&mut self) -> DriveResult<()> {
         self.send_response(self.drive_status.bits(), 3);
         self.drive_status.remove(DriveStatus::ShellOpen);
+        self.command_complete();
         Ok(())
     }
 
@@ -580,14 +710,17 @@ impl CDROM {
         //  send 00
         // send file filter
         // send channel filter
+        self.command_complete();
         Ok(())
     }
 
     fn get_loc_l(&mut self) -> DriveResult<()> {
+        self.command_complete();
         Ok(())
     }
 
     fn get_loc_p(&mut self) -> DriveResult<()> {
+        self.command_complete();
         Ok(())
     }
 
@@ -598,6 +731,7 @@ impl CDROM {
         self.send_response(self.drive_status.bits(), 3);
         self.send_response(first_track, 3);
         self.send_response(last_track, 3);
+        self.command_complete();
         Ok(())
     }
 
@@ -609,6 +743,7 @@ impl CDROM {
         self.send_response(self.drive_status.bits(), 3);
         self.send_response(minute, 3);
         self.send_response(second, 3);
+        self.command_complete();
         Ok(())
     }
 
@@ -617,27 +752,35 @@ impl CDROM {
     }
 
     fn get_id(&mut self) -> DriveResult<()> {
-        //self.send_response(self.drive_status.bits(), 3);
-        if self.disc.is_some() {
-            self.send_response(0x02, 2); // Stat?
-            self.send_response(0x00, 2); // Flags
-            self.send_response(0x20, 2); // Mode 2
-            self.send_response(0x00, 2);
-            // Region String:
-            self.send_response(0x53, 2); // S
-            self.send_response(0x43, 2); // C
-            self.send_response(0x45, 2); // E
-            self.send_response(0x41, 2); // [Region: A/E/I] TODO: set based on disc.
-        } else {
-            self.send_response(0x08, 5); // Stat?
-            self.send_response(0x40, 5); // Flags
-            self.send_response(0x00, 5);
-            self.send_response(0x00, 5);
-            // Region String:
-            self.send_response(0x00, 5);
-            self.send_response(0x00, 5);
-            self.send_response(0x00, 5);
-            self.send_response(0x00, 5);
+        match self.response_count {
+            0 => {
+                self.send_response(self.drive_status.bits(), 3);
+                self.first_response();
+            },
+            _ => {
+                if self.disc.is_some() {
+                    self.send_response(0x02, 2); // Stat?
+                    self.send_response(0x00, 2); // Flags
+                    self.send_response(0x20, 2); // Mode 2
+                    self.send_response(0x00, 2);
+                    // Region String:
+                    self.send_response(0x53, 2); // S
+                    self.send_response(0x43, 2); // C
+                    self.send_response(0x45, 2); // E
+                    self.send_response(0x41, 2); // [Region: A/E/I] TODO: set based on disc.
+                } else {
+                    self.send_response(0x08, 5); // Stat?
+                    self.send_response(0x40, 5); // Flags
+                    self.send_response(0x00, 5);
+                    self.send_response(0x00, 5);
+                    // Region String:
+                    self.send_response(0x00, 5);
+                    self.send_response(0x00, 5);
+                    self.send_response(0x00, 5);
+                    self.send_response(0x00, 5);
+                }
+                self.command_complete();
+            }
         }
         Ok(())
     }
@@ -650,6 +793,7 @@ impl CDROM {
                 self.send_response(0x05, 3); // mm
                 self.send_response(0x16, 3); // dd
                 self.send_response(0xC1, 3); // version
+                self.command_complete();
             },
             _ => panic!("unsupported CD subfunction {:X}", op),
         }

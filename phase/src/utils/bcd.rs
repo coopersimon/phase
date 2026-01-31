@@ -10,3 +10,16 @@ pub const fn to_bcd(binary: u8) -> Option<u8> {
         Some((tens * 0x10) + units)
     }
 }
+
+/// Convert a number from binary coded decimal input.
+/// 
+/// Input must be in range 0x0-0x9, 0x10-0x19, ...
+pub const fn from_bcd(bcd: u8) -> Option<u8> {
+    let tens = bcd / 0x10;
+    let units = bcd % 0x10;
+    if tens > 0x9 || units > 0x9 {
+        None
+    } else {
+        Some(tens * 10 + units)
+    }
+}
