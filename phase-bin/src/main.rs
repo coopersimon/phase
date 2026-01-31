@@ -36,19 +36,20 @@ fn main() {
         bios_path: PathBuf::from(args.bios)
     };
     let playstation = PlayStation::new(config);
+    let game_disc = args.game.map(|s| s.try_into().expect("invalid path"));
 
     if args.debug {
         debug::debug_mode(playstation.make_debugger());
     } else {
-        run(playstation);
+        run(playstation, game_disc);
     }
 }
 
 /// Run playstation with visuals.
-fn run(playstation: PlayStation) {
+fn run(playstation: PlayStation, game_disc: Option<PathBuf>) {
     let event_loop = EventLoop::new().expect("Failed to create event loop");
 
-    let mut app = App::new(playstation);
+    let mut app = App::new(playstation, game_disc);
 
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
     event_loop.run_app(&mut app).unwrap();
@@ -74,6 +75,7 @@ impl WindowState {
 struct App {
     window: Option<WindowState>,
     console: PlayStation,
+    inserted_disc: Option<PathBuf>,
 
     // WGPU params
     instance:        wgpu::Instance,
@@ -93,7 +95,7 @@ struct App {
 }
 
 impl App {
-    fn new(console: PlayStation/*, audio_stream: cpal::Stream*/) -> Self {
+    fn new(console: PlayStation, game_disc: Option<PathBuf>/*, audio_stream: cpal::Stream*/) -> Self {
         // Setup wgpu
         let instance = wgpu::Instance::new(&Default::default());
 
@@ -183,6 +185,7 @@ impl App {
         Self {
             window: None,
             console,
+            inserted_disc: game_disc,
 
             instance,
             adapter,
@@ -246,6 +249,9 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         self.console.run_cpu();
         self.console.attach_controller(ControllerType::Digital, Port::One);
+        if let Some(disc) = self.inserted_disc.clone() {
+            self.console.insert_cd(disc);
+        }
 
         let window_attrs = Window::default_attributes()
             .with_inner_size(Size::Logical(LogicalSize{width: 640.0, height: 480.0}))
