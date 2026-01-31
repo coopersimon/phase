@@ -54,6 +54,7 @@ pub struct CDROM {
     drive_status: DriveStatus,
     mode: DriveMode,
     loc: DriveLoc,
+    seeked: bool,
 
     counter: usize,
     command: u8,
@@ -86,6 +87,7 @@ impl CDROM {
             drive_status: DriveStatus::empty(),
             mode: DriveMode::empty(),
             loc: DriveLoc { minute: 0, second: 0, sector: 0 },
+            seeked: false,
 
             counter: 0,
             command: 0,
@@ -410,6 +412,8 @@ impl CDROM {
             0x08 => self.stop(),
             0x09 => self.pause(),
             0x0A => self.init(),
+            0x0B => self.mute(),
+            0x0C => self.demute(),
             0x0D => self.set_filter(),
             0x0E => self.set_mode(),
             0x0F => self.get_param(),
@@ -590,6 +594,7 @@ impl CDROM {
         self.loc.second = from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?; // ss
         self.loc.sector = from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?; // sector / frame
         println!("Seek to {:X},{:X},{:X}", self.loc.minute, self.loc.second, self.loc.sector);
+        self.seeked = false;
         self.send_response(self.drive_status.bits(), 3);
         self.command_complete();
         Ok(())
@@ -602,13 +607,12 @@ impl CDROM {
                 self.drive_status.remove(DriveStatus::ReadBits);
                 self.drive_status.insert(DriveStatus::Seeking);
                 self.drive_status.insert(DriveStatus::SpindleMotor);
-                self.seek_file_offset = self.loc.byte_offset();
-                //self.sector_offset = file_offset % DISC_BUFFER_SIZE;
-                //self.file_offset = file_offset - self.sector_offset;
                 self.send_response(self.drive_status.bits(), 3);
                 self.first_response();
             },
             _ => {
+                self.seek_file_offset = self.loc.byte_offset();
+                self.seeked = true;
                 self.send_response(self.drive_status.bits(), 2);
                 self.command_complete();
             }
@@ -618,13 +622,14 @@ impl CDROM {
 
     /// Audio seek
     fn seek_p(&mut self) -> DriveResult<()> {
-        self.drive_status.remove(DriveStatus::ReadBits);
+        unimplemented!("audio seek");
+        /*self.drive_status.remove(DriveStatus::ReadBits);
         self.drive_status.insert(DriveStatus::Seeking);
         self.drive_status.insert(DriveStatus::SpindleMotor);
         let _byte_offset = self.loc.byte_offset();
         // TODO ? (subchannel Q)
         self.command_complete();
-        Ok(())
+        Ok(())*/
     }
 
     fn set_session(&mut self) -> DriveResult<()> {
@@ -650,11 +655,18 @@ impl CDROM {
         match self.response_count {
             0 => {
                 self.drive_status.remove(DriveStatus::ReadBits);
-                self.drive_status.insert(DriveStatus::Reading);
+                self.drive_status.insert(DriveStatus::Seeking);
                 self.send_response(self.drive_status.bits(), 3);
                 self.first_response();
             },
             _ => {
+                // We need to seek if we have an unprocessed seek.
+                if !self.seeked {
+                    self.seek_file_offset = self.loc.byte_offset();
+                    self.seeked = true;
+                }
+                self.drive_status.remove(DriveStatus::ReadBits);
+                self.drive_status.insert(DriveStatus::Reading);
                 self.read_sector();
                 self.send_response(self.drive_status.bits(), 1);
                 self.command_complete();
@@ -797,6 +809,19 @@ impl CDROM {
             },
             _ => panic!("unsupported CD subfunction {:X}", op),
         }
+        Ok(())
+    }
+
+    fn mute(&mut self) -> DriveResult<()> {
+        self.send_response(self.drive_status.bits(), 3);
+        self.command_complete();
+        Ok(())
+    }
+
+    fn demute(&mut self) -> DriveResult<()> {
+        // TODO: start audio streaming..?
+        self.send_response(self.drive_status.bits(), 3);
+        self.command_complete();
         Ok(())
     }
 }

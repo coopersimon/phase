@@ -109,10 +109,12 @@ impl MemInterface for SPU {
             0x1F80_1DB2 => self.cd_input_vol.right,
             0x1F80_1DB4 => self.ext_input_vol.left,
             0x1F80_1DB6 => self.ext_input_vol.right,
+            0x1F80_1DB8 => 0, // TODO: current main volume.
+            0x1F80_1DBA => 0, // TODO: current main volume.
             0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
                 0
             },
-            _ => panic!("invalid SPU address {:X}", addr)
+            _ => panic!("invalid SPU read {:X}", addr)
         }
     }
 
@@ -136,6 +138,8 @@ impl MemInterface for SPU {
             0x1F80_1D96 => {}, // TODO:Noise flags
             0x1F80_1D98 => {}, // TODO:Echo flags
             0x1F80_1D9A => {}, // TODO:Echo flags
+            0x1F80_1D9C => {}, // TODO:ENDX flags
+            0x1F80_1D9E => {}, // TODO:ENDX flags
             0x1F80_1DA2 => {}, // TODO: reverb base
             0x1F80_1DA4 => self.ram_irq_addr = data,
             0x1F80_1DA6 => {
@@ -152,7 +156,7 @@ impl MemInterface for SPU {
             0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
                 
             },
-            _ => panic!("invalid SPU address {:X}", addr)
+            _ => panic!("invalid SPU write {:X}", addr)
         }
     }
 
