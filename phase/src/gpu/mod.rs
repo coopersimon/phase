@@ -28,6 +28,11 @@ pub struct GPU {
 
     status: Arc<AtomicU32>,
     read_reg: u32,
+    // Below are used only for returning via GPU Info command
+    tex_window: u32,
+    draw_area_top_left: u32,
+    draw_area_bottom_right: u32,
+    draw_offset: u32,
 
     renderer_tx: Sender<RendererCmd>,
     frame_rx: Receiver<()>,
@@ -51,6 +56,10 @@ impl GPU {
 
             status: status,
             read_reg: 0,
+            tex_window: 0,
+            draw_area_top_left: 0,
+            draw_area_bottom_right: 0,
+            draw_offset: 0,
 
             renderer_tx,
             frame_rx,
@@ -142,12 +151,20 @@ impl DMADevice for GPU {
 // Internal
 impl GPU {
     fn send_gp0_command(&mut self, data: u32) {
+        let command = (data >> 24) as u8;
+        match command {
+            0xE2 => self.tex_window = data & 0xFF_FFFF,
+            0xE3 => self.draw_area_top_left = data & 0xFF_FFFF,
+            0xE4 => self.draw_area_bottom_right = data & 0xFF_FFFF,
+            0xE5 => self.draw_offset = data & 0xFF_FFFF,
+            _ => {}
+        }
         //println!("GP0 send: {:X}", data);
         let _ = self.renderer_tx.send(RendererCmd::GP0(data));
     }
 
     fn send_gp1_command(&mut self, data: u32) {
-        println!("GP1 command: {:X}", data);
+        //println!("GP1 command: {:X}", data);
         let command = (data >> 24) as u8;
         match command {
             0x00 => self.reset(),
@@ -246,13 +263,13 @@ impl GPU {
     }
 
     fn get_gpu_info(&mut self, param: u32) {
-        println!("Get GPU INFO {:X}", param);
         match param & 0x7 {
-            2 => self.read_reg = 0, // Tex window
-            3 => self.read_reg = 0, // Draw area top-left
-            4 => self.read_reg = 0, // Draw area bottom-right
-            5 => self.read_reg = 0, // Draw offset
-            _ => {}, // NOP.
+            2 => self.read_reg = self.tex_window,
+            3 => self.read_reg = self.draw_area_top_left,
+            4 => self.read_reg = self.draw_area_bottom_right,
+            5 => self.read_reg = self.draw_offset,
+            7 => self.read_reg = 0, // GPU type.
+            _ => panic!("Get GPU INFO {:X}", param & 0x7), // NOP.
         }
     }
 

@@ -188,7 +188,7 @@ const POLY_LINE_TERM: u32 = 0x5555_5555;
 // GP0.
 impl Renderer {
     fn exec_gp0_command(&mut self, data: u32) {
-        println!("GP0 command: {:X}", data);
+        //println!("GP0 command: {:X}", data);
         self.status.remove(GPUStatus::CommandReady);
         self.atomic_status.store(self.status.bits(), Ordering::Release);
         let command = (data >> 24) as u8;
@@ -801,9 +801,9 @@ impl Color {
 
     fn blend(&self, other: &Color) -> Color {
         Color {
-            r: (((self.r as u16) * (other.r as u16)) >> 8) as u8,
-            g: (((self.g as u16) * (other.g as u16)) >> 8) as u8,
-            b: (((self.b as u16) * (other.b as u16)) >> 8) as u8,
+            r: (((self.r as u16) * (other.r as u16)) >> 7).try_into().unwrap_or(0xFF),
+            g: (((self.g as u16) * (other.g as u16)) >> 7).try_into().unwrap_or(0xFF),
+            b: (((self.b as u16) * (other.b as u16)) >> 7).try_into().unwrap_or(0xFF),
         }
     }
 }

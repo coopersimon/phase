@@ -176,13 +176,17 @@ impl RendererImpl for SoftwareRenderer {
     }
 
     fn draw_rectangle(&mut self, color: Color, top_left: Coord, size: Size, transparent: bool) {
-        let top = top_left.y;
+        let top = top_left.y + self.draw_offset.y;
         let bottom = top + size.height as i16;
-        let left = top_left.x;
+        let left = top_left.x + self.draw_offset.x;
         let right = left + size.width as i16;
-        for y in top..bottom {
+        let y_min = top.max(self.drawing_area.top);
+        let y_max = bottom.min(self.drawing_area.bottom);
+        let x_min = left.max(self.drawing_area.left);
+        let x_max = right.min(self.drawing_area.right);
+        for y in y_min..y_max {
             let line_addr = (y as usize) * 1024;
-            for x in left..right {
+            for x in x_min..x_max {
                 let addr = line_addr + (x as usize);
                 self.vram[addr] = color.to_rgb15();
             }
@@ -190,14 +194,25 @@ impl RendererImpl for SoftwareRenderer {
     }
 
     fn draw_rectangle_tex(&mut self, color: Color, tex_coord: TexCoord, tex_info: &TexInfo, top_left: Coord, size: Size, transparent: bool) {
-        let top = top_left.y;
+        let top = top_left.y + self.draw_offset.y;
         let bottom = top + size.height as i16;
-        let left = top_left.x;
+        let left = top_left.x + self.draw_offset.x;
         let right = left + size.width as i16;
+        let y_min = top.max(self.drawing_area.top);
+        let y_max = bottom.min(self.drawing_area.bottom);
+        let x_min = left.max(self.drawing_area.left);
+        let x_max = right.min(self.drawing_area.right);
         let mut current_tex_coord = tex_coord;
-        for y in top..bottom {
+        // TODO: this offsetting is a bit clunky...
+        if left < 0 {
+            current_tex_coord.s += (-left) as u8;
+        }
+        if top < 0 {
+            current_tex_coord.t += (-top) as u8;
+        }
+        for y in y_min..y_max {
             let line_addr = (y as usize) * 1024;
-            for x in left..right {
+            for x in x_min..x_max {
                 let tex_color = self.tex_lookup(&current_tex_coord, tex_info);
                 if tex_color != 0 {
                     let addr = line_addr + (x as usize);

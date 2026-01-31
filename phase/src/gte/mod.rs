@@ -65,11 +65,9 @@ impl Coprocessor for GTE {
             const MASK: u32 = 0x3F;
             (instr & MASK) as u8
         };
-        // If bit 19 is set, shift left by 12.
         let shift = {
             const MASK: u32 = 0x0008_0000;
-            const SHIFT: usize = 19 - 12;
-            ((instr & MASK) >> SHIFT) as u8
+            if instr & MASK != 0 {12} else {0}
         };
         let ir_unsigned = {
             const MASK: u32 = 0x0000_0400;
@@ -441,8 +439,8 @@ impl GTE {
             let rt21 = self.get_control_i16_hi(RT13_21) as i64;
             let rt22 = self.get_control_i16_lo(RT22_23) as i64;
             let rt23 = self.get_control_i16_hi(RT22_23) as i64;
-            let _try = self.get_control_i32(TRY) as i64;
-            let mac2 = (_try << 12) + rt21 * vx + rt22 * vy + rt23 * vz;
+            let try_ = self.get_control_i32(TRY) as i64;
+            let mac2 = (try_ << 12) + rt21 * vx + rt22 * vy + rt23 * vz;
             let mac2 = self.set_mac2(mac2, shift);
             self.set_ir2(mac2, ir_unsigned)
         };
@@ -453,7 +451,7 @@ impl GTE {
             let trz = self.get_control_i32(TRZ) as i64;
             let mac3 = (trz << 12) + rt31 * vx + rt32 * vy + rt33 * vz;
             let mac3 = self.set_mac3(mac3, shift);
-            self.set_ir3(mac3, ir_unsigned);
+            let _ir3 = self.set_ir3(mac3, ir_unsigned);
             let sz3 = mac3.clamp(0, 0xFFFF);
             self.regs[SZ3.idx()] = sz3 as u32;
             self.set_flag(Flag::SZ3Sat, (mac3 as u32) > 0xFFFF);
@@ -619,17 +617,17 @@ impl GTE {
         let ir0 = self.get_reg_i16_lo(IR0) as i64;
         let r = {
             let r = ((rgbc >> 16) & 0xFF) as i64;
-            let mac1 = (self.set_mac1(ir1 * r, 0) >> 4) as i64;
+            let mac1 = self.set_mac1(ir1 * r, 0) as i64; // TODO: shift left by 4?
             self.rfc_interpolate(shift, ir_unsigned, mac1, ir0)
         };
         let g = {
             let g = ((rgbc >> 8) & 0xFF) as i64;
-            let mac2 = (self.set_mac2(ir2 * g, 0) >> 4) as i64;
+            let mac2 = self.set_mac2(ir2 * g, 0) as i64; // TODO: shift left by 4?
             self.gfc_interpolate(shift, ir_unsigned, mac2, ir0)
         };
         let b = {
             let b = (rgbc & 0xFF) as i64;
-            let mac3 = (self.set_mac3(ir3 * b, 0) >> 4) as i64;
+            let mac3 = self.set_mac3(ir3 * b, 0) as i64; // TODO: shift left by 4?
             self.bfc_interpolate(shift, ir_unsigned, mac3, ir0)
         };
         self.push_color(rgbc, r, g, b);
