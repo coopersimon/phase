@@ -373,7 +373,7 @@ impl CDROM {
         let start_pos = self.seek_file_offset - self.buffer_file_offset;
         if self.mode.contains(DriveMode::SectorSize) {
             self.sector_offset = start_pos + SECTOR_SYNC_BYTES;
-            self.data_fifo_size = SECTOR_SIZE - SECTOR_SYNC_BYTES;
+            self.data_fifo_size = SECTOR_DATA + SECTOR_SYNC_BYTES;
         } else {
             self.sector_offset = start_pos + SECTOR_HEADER;
             self.data_fifo_size = SECTOR_DATA;
@@ -531,6 +531,7 @@ impl CDROM {
 
     fn set_mode(&mut self) -> DriveResult<()> {
         let mode = self.read_parameter()?;
+        println!("Set mode: {:X}", mode);
         self.mode = DriveMode::from_bits_truncate(mode);
         self.send_response(self.drive_status.bits(), 3);
         self.command_complete()
@@ -683,19 +684,7 @@ impl CDROM {
 
     /// Read without retry
     fn read_s(&mut self) -> DriveResult<()> {
-        match self.response_count {
-            0 => {
-                self.drive_status.remove(DriveStatus::ReadBits);
-                self.drive_status.insert(DriveStatus::Reading);
-                self.send_response(self.drive_status.bits(), 3);
-                self.first_response()
-            },
-            _ => {
-                self.read_sector();
-                self.send_response(self.drive_status.bits(), 1);
-                self.command_complete()
-            }
-        }
+        self.read_n()
     }
 
     /// Read table of contents
@@ -735,7 +724,15 @@ impl CDROM {
     }
 
     fn get_loc_p(&mut self) -> DriveResult<()> {
-        unimplemented!("get loc p");
+        // TODO: verify this.
+        self.send_response(0x01, 3); // Track number
+        self.send_response(0x01, 3); // Index number
+        self.send_response(0x00, 3); // Minute number
+        self.send_response(0x00, 3); // Second number
+        self.send_response(0x00, 3); // Sector number
+        self.send_response(0x00, 3); // Minute number
+        self.send_response(0x00, 3); // Second number
+        self.send_response(0x00, 3); // Sector number
         self.command_complete()
     }
 
