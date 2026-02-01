@@ -6,7 +6,7 @@ This is a PlayStation emulator. It is in development. It does software rendering
 
 Below is a list of selected games and their status.
 
-- Crash Bandicoot: Boots, rendering issues
+- Crash Bandicoot: Boots, everything with negative X coords looks broken.
 - Crash Team Racing: Does not boot.
 - Final Fantasy 7: MDEC crash
 - Final Fantasy Tactics: Does not boot.

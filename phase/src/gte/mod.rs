@@ -4,6 +4,13 @@ mod test;
 use mips::coproc::Coprocessor;
 use crate::utils::bits::*;
 
+#[inline(always)]
+/// Take the lower 16 bits of a value, and fill the top 16 bits
+/// with the sign bit.
+fn sign_extend_16(data: u32) -> u32 {
+    data as i16 as i32 as u32
+}
+
 pub struct GTE {
     regs:           [u32; 32],
     control_regs:   [u32; 32]
@@ -20,35 +27,52 @@ impl GTE {
 
 impl Coprocessor for GTE {
     fn load_from_mem(&mut self, reg: u8, data: u32) {
+        //println!("MEM: move {:X} to {}", data, reg);
         self.move_to_reg(reg, data);
     }
 
     fn store_to_mem(&mut self, reg: u8) -> u32 {
-        self.move_from_reg(reg)
+        let data = self.move_from_reg(reg);
+        //println!("MEM: move {:X} from {}", data, reg);
+        data
     }
 
     fn move_from_control(&mut self, reg: u8) -> u32 {
-        self.control_regs[reg as usize]
+        let value = self.control_regs[reg as usize];
+        let data = match reg {
+            4 | 12 | 20 | 26 => sign_extend_16(value),
+            _ => value
+        };
+        //println!("CTL: move {:X} from {}", data, reg);
+        data
     }
 
     fn move_to_control(&mut self, reg: u8, data: u32) {
+        //println!("CTL: move {:X} to {}", data, reg);
         self.control_regs[reg as usize] = data;
     }
 
     fn move_from_reg(&mut self, reg: u8) -> u32 {
         use Reg::*;
-        if reg as usize == LZCR.idx() {
+        let data = if reg as usize == LZCR.idx() {
             self.count_leading_zeros()
         } else if reg as usize == SXYP.idx() {
             self.regs[SXY2.idx()]
         } else if reg as usize == IRGB.idx() || reg as usize == ORGB.idx() {
             self.color_convert_out()
         } else {
-            self.regs[reg as usize]
-        }
+            let value = self.regs[reg as usize];
+            match reg {
+                1 | 3 | 5 | 8 | 9 | 10 | 11 => sign_extend_16(value),
+                _ => value,
+            }
+        };
+        //println!("REG: move {:X} from {}", data, reg);
+        data
     }
 
     fn move_to_reg(&mut self, reg: u8, data: u32) {
+        //println!("REG: move {:X} to {}", data, reg);
         use Reg::*;
         if reg as usize == SXYP.idx() {
             self.push_sxy_stack(data);
@@ -74,6 +98,7 @@ impl Coprocessor for GTE {
             const SHIFT: usize = 10;
             ((instr & MASK) >> SHIFT) == 1
         };
+        //println!("GTE {:X} ({:X})", instr, op);
         match op {
             0x01 => self.rtps(shift, ir_unsigned),
             0x06 => self.nclip(),
@@ -226,7 +251,7 @@ bitflags::bitflags! {
         const SYSat = bit!(13);
         const IR0Sat = bit!(12);
 
-        const ChecksumTest = bits![30, 29, 28, 27, 26, 25, 24, 23, 22, 18, 17, 16, 15, 14, 13, 12];
+        const ChecksumTest = bits![30, 29, 28, 27, 26, 25, 24, 23, 22, 18, 17, 16, 15, 14, 13];
     }
 }
 
@@ -310,8 +335,8 @@ impl GTE {
         self.set_flag(Flag::MAC1PosOvf, data > 0x7FF_FFFF_FFFF);
         self.set_flag(Flag::MAC1NegOvf, data < -0x800_0000_0000);
         let mac1 = (data >> shift) as i32;
-        self.regs[Reg::MAC1.idx()] = data as u32;
-        mac1 as i32
+        self.regs[Reg::MAC1.idx()] = mac1 as u32;
+        mac1
     }
 
     #[inline]
@@ -333,7 +358,7 @@ impl GTE {
         } else {
             mac1 as i16
         };
-        self.regs[Reg::IR1.idx()] = ir1 as u32; // TODO: sign extend?
+        self.regs[Reg::IR1.idx()] = ir1 as i32 as u32;
         ir1 as i64
     }
 
@@ -345,8 +370,8 @@ impl GTE {
         self.set_flag(Flag::MAC2PosOvf, data > 0x7FF_FFFF_FFFF);
         self.set_flag(Flag::MAC2NegOvf, data < -0x800_0000_0000);
         let mac2 = (data >> shift) as i32;
-        self.regs[Reg::MAC2.idx()] = data as u32;
-        mac2 as i32
+        self.regs[Reg::MAC2.idx()] = mac2 as u32;
+        mac2
     }
 
     #[inline]
@@ -368,7 +393,7 @@ impl GTE {
         } else {
             mac2 as i16
         };
-        self.regs[Reg::IR2.idx()] = ir2 as u32; // TODO: sign extend?
+        self.regs[Reg::IR2.idx()] = ir2 as i32 as u32;
         ir2 as i64
     }
 
@@ -380,8 +405,8 @@ impl GTE {
         self.set_flag(Flag::MAC3PosOvf, data > 0x7FF_FFFF_FFFF);
         self.set_flag(Flag::MAC3NegOvf, data < -0x800_0000_0000);
         let mac3 = (data >> shift) as i32;
-        self.regs[Reg::MAC3.idx()] = data as u32;
-        mac3 as i32
+        self.regs[Reg::MAC3.idx()] = mac3 as u32;
+        mac3
     }
 
     #[inline]
@@ -403,7 +428,7 @@ impl GTE {
         } else {
             mac3 as i16
         };
-        self.regs[Reg::IR3.idx()] = ir3 as u32; // TODO: sign extend?
+        self.regs[Reg::IR3.idx()] = ir3 as i32 as u32;
         ir3 as i64
     }
 
@@ -902,7 +927,7 @@ impl GTE {
             ],
             3 => [
                 self.get_reg_i16_lo(IR1) as i64,
-                self.get_reg_i16_hi(IR2) as i64,
+                self.get_reg_i16_lo(IR2) as i64,
                 self.get_reg_i16_lo(IR3) as i64,
             ],
             _ => unreachable!()
@@ -959,13 +984,13 @@ impl GTE {
             3 => [0, 0, 0],
             _ => unreachable!()
         };
-        let mac1 = m_vec[0] * mat[0] + m_vec[1] * mat[3] + m_vec[2] * mat[6] + (t_vec[0] << 12);
+        let mac1 = m_vec[0] * mat[0] + m_vec[1] * mat[1] + m_vec[2] * mat[2] + (t_vec[0] << 12);
         let mac1 = self.set_mac1(mac1, shift);
         self.set_ir1(mac1, ir_unsigned);
-        let mac2 = m_vec[0] * mat[1] + m_vec[1] * mat[4] + m_vec[2] * mat[7] + (t_vec[1] << 12);
+        let mac2 = m_vec[0] * mat[3] + m_vec[1] * mat[4] + m_vec[2] * mat[5] + (t_vec[1] << 12);
         let mac2 = self.set_mac2(mac2, shift);
         self.set_ir2(mac2, ir_unsigned);
-        let mac3 = m_vec[0] * mat[2] + m_vec[1] * mat[5] + m_vec[2] * mat[8] + (t_vec[2] << 12);
+        let mac3 = m_vec[0] * mat[6] + m_vec[1] * mat[7] + m_vec[2] * mat[8] + (t_vec[2] << 12);
         let mac3 = self.set_mac3(mac3, shift);
         self.set_ir3(mac3, ir_unsigned);
     }
@@ -973,9 +998,9 @@ impl GTE {
     /// Color color.
     fn cc(&mut self, shift: u8, ir_unsigned: bool) {
         use Reg::*;
-        let ir1 = self.get_reg_i16_lo(IR0) as i64;
-        let ir2 = self.get_reg_i16_lo(IR1) as i64;
-        let ir3 = self.get_reg_i16_lo(IR2) as i64;
+        let ir1 = self.get_reg_i16_lo(IR1) as i64;
+        let ir2 = self.get_reg_i16_lo(IR2) as i64;
+        let ir3 = self.get_reg_i16_lo(IR3) as i64;
         let [mac1, mac2, mac3] = self.color_mat_mul(shift, ir1, ir2, ir3);
         self.color_color(shift, ir_unsigned, mac1, mac2, mac3);
     }
@@ -983,9 +1008,9 @@ impl GTE {
     /// Color depth cue.
     fn cdp(&mut self, shift: u8, ir_unsigned: bool) {
         use Reg::*;
-        let ir1 = self.get_reg_i16_lo(IR0) as i64;
-        let ir2 = self.get_reg_i16_lo(IR1) as i64;
-        let ir3 = self.get_reg_i16_lo(IR2) as i64;
+        let ir1 = self.get_reg_i16_lo(IR1) as i64;
+        let ir2 = self.get_reg_i16_lo(IR2) as i64;
+        let ir3 = self.get_reg_i16_lo(IR3) as i64;
         let [mac1, mac2, mac3] = self.color_mat_mul(shift, ir1, ir2, ir3);
         let ir1 = self.set_ir1(mac1, ir_unsigned);
         let ir2 = self.set_ir2(mac2, ir_unsigned);
