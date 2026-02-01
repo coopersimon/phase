@@ -139,7 +139,7 @@ bitflags::bitflags! {
     struct TimerMode: u16 {
         const ReachedMax    = bit!(12);
         const ReachedTarget = bit!(11);
-        const IRQReq        = bit!(10);
+        const IRQ           = bit!(10);
         const ClockSrc      = bits![8, 9];
         const ToggleIRQ     = bit!(7);
         const RepeatIRQ     = bit!(6);
@@ -155,26 +155,28 @@ bitflags::bitflags! {
 
 /// Timer.
 struct Timer {
-    counter:    u16,
-    mode:       TimerMode,
-    target:     u16,
-    irq_latch:  bool,
-    in_blank:   bool,
+    counter:     u16,
+    mode:        TimerMode,
+    target:      u16,
+    irq_latch:   bool,
+    pulse_latch: bool,
+    in_blank:    bool,
 
-    pause:      bool,
-    blank_timer:bool,
+    pause:       bool,
+    blank_timer: bool,
 }
 
 impl Timer {
     fn new(blank_timer: bool) -> Self {
         Self {
-            counter:    0,
-            mode:       TimerMode::IRQReq,
-            target:     0,
-            irq_latch:  false,
-            in_blank:   false,
+            counter:     0,
+            mode:        TimerMode::IRQ,
+            target:      0,
+            irq_latch:   false,
+            pulse_latch: false,
+            in_blank:    false,
 
-            pause:      false,
+            pause:       false,
             blank_timer
         }
     }
@@ -183,10 +185,10 @@ impl Timer {
         let mode_write = TimerMode::from_bits_truncate(mode);
         self.mode.remove(TimerMode::Writable);
         self.mode.insert(mode_write & TimerMode::Writable);
-        if mode_write.contains(TimerMode::IRQReq) {
+        if mode_write.contains(TimerMode::IRQ) {
             self.irq_latch = false;
         }
-        self.mode.insert(TimerMode::IRQReq);
+        self.mode.insert(TimerMode::IRQ);
         if mode_write.contains(TimerMode::SyncEnable) {
             if self.blank_timer {
                 match (self.mode & TimerMode::SyncMode).bits() >> 1 {
@@ -206,6 +208,7 @@ impl Timer {
         } else {
             self.pause = false;
         }
+        self.counter = 0;
     }
 
     fn read_mode(&mut self) -> u16 {
@@ -253,20 +256,15 @@ impl Timer {
     }
 
     fn clock(&mut self, cycles: usize) -> bool {
+        if self.pulse_latch {
+            self.mode.insert(TimerMode::IRQ);
+        }
         if self.pause {
             return false;
         }
-        let prev_irq_req = self.mode.contains(TimerMode::IRQReq);
+        let prev_irq_req = self.mode.contains(TimerMode::IRQ);
         let new_counter = (self.counter as usize) + cycles;
         self.counter = new_counter as u16;
-        if new_counter >= (self.target as usize) {
-            if self.mode.contains(TimerMode::TargetIRQ) {
-                self.trigger_interrupt();
-            }
-            if self.mode.contains(TimerMode::Reset) {
-                self.counter = (new_counter - (self.target as usize)) as u16;
-            }
-        }
         if new_counter >= 0xFFFF {
             if self.mode.contains(TimerMode::MaxIRQ) {
                 self.trigger_interrupt();
@@ -275,24 +273,33 @@ impl Timer {
                 self.counter = (new_counter - 0xFFFF) as u16;
             }
         }
-        prev_irq_req && !self.mode.contains(TimerMode::IRQReq)
+        if new_counter >= (self.target as usize) {
+            if self.mode.contains(TimerMode::TargetIRQ) {
+                self.trigger_interrupt();
+            }
+            if self.mode.contains(TimerMode::Reset) {
+                self.counter = (new_counter - (self.target as usize)) as u16;
+            }
+        }
+        prev_irq_req && !self.mode.contains(TimerMode::IRQ)
     }
 
     fn trigger_interrupt(&mut self) {
         if self.mode.contains(TimerMode::RepeatIRQ) {
             if self.mode.contains(TimerMode::ToggleIRQ) {
-                self.mode.toggle(TimerMode::IRQReq);
+                self.mode.toggle(TimerMode::IRQ);
             } else {
-                self.mode.remove(TimerMode::IRQReq);
+                self.mode.remove(TimerMode::IRQ);
+                self.pulse_latch = true;
             }
         } else {
             if !self.irq_latch {
                 self.irq_latch = true;
                 // TODO: should it do this? or always remove IRQReq?
                 if self.mode.contains(TimerMode::ToggleIRQ) {
-                    self.mode.toggle(TimerMode::IRQReq);
+                    self.mode.toggle(TimerMode::IRQ);
                 } else {
-                    self.mode.remove(TimerMode::IRQReq);
+                    self.mode.remove(TimerMode::IRQ);
                 }
             }
         }
