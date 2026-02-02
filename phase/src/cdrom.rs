@@ -1,10 +1,10 @@
 use std::{
+    fs::File,
     io::{
         Read,
         Seek,
         SeekFrom
     },
-    fs::File,
     path::Path
 };
 
@@ -47,6 +47,9 @@ pub struct CDROM {
     vol_left_to_right: u8,
     vol_right_to_left: u8,
     vol_right_to_right: u8,
+    file_filter: u8,
+    channel_filter: u8,
+    sound_map_info: SoundMapInfo,
 
     param_fifo: VecDeque<u8>,
     response_fifo: VecDeque<u8>,
@@ -71,7 +74,7 @@ impl CDROM {
             seek_file_offset: 0,
             sector_offset: 0,
 
-            status: Status::ParamFifoEmpty | Status::ParamFifoFull,
+            status: Status::ParamFifoEmpty | Status::ParamFifoNotFull,
             int_enable: IntFlags::Unused,
             int_flags: IntFlags::Unused,
             request: Request::empty(),
@@ -80,6 +83,9 @@ impl CDROM {
             vol_left_to_right: 0,
             vol_right_to_left: 0,
             vol_right_to_right: 0,
+            file_filter: 0,
+            channel_filter: 0,
+            sound_map_info: SoundMapInfo::empty(),
 
             param_fifo: VecDeque::new(),
             response_fifo: VecDeque::new(),
@@ -119,6 +125,7 @@ impl CDROM {
         if self.counter > 0 {
             self.counter = self.counter.saturating_sub(cycles);
             if self.counter == 0 {
+                self.status.remove(Status::ADPBusy);
                 self.exec_command();
             }
         }
@@ -154,7 +161,7 @@ impl MemInterface for CDROM {
             0x1F80_1801 => match self.index() {
                 0 => self.write_command(data),
                 1 => {}, // TODO: sound map data out
-                2 => {}, // TODO: sound map coding info
+                2 => self.sound_map_info = SoundMapInfo::from_bits_truncate(data),
                 3 => self.vol_right_to_right = data,
                 _ => unreachable!()
             },
@@ -227,9 +234,9 @@ bitflags::bitflags! {
     #[derive(Clone, Copy)]
     struct Status: u8 {
         const Busy              = bit!(7);
-        const DataFifoEmpty     = bit!(6);  // 0 = Empty
-        const ResFifoEmpty      = bit!(5);  // 0 = Empty
-        const ParamFifoFull     = bit!(4);  // 0 = Full
+        const DataFifoNotEmpty  = bit!(6);  // 0 = Empty
+        const ResFifoNotEmpty   = bit!(5);  // 0 = Empty
+        const ParamFifoNotFull  = bit!(4);  // 0 = Full
         const ParamFifoEmpty    = bit!(3);  // 1 = Empty
         const ADPBusy           = bit!(2);  // 0 = Empty
         const PortIndex         = bits![0, 1];
@@ -256,6 +263,16 @@ bitflags::bitflags! {
     }
 }
 
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    struct SoundMapInfo: u8 {
+        const Emphasis      = bit!(6);
+        const BitsPerSample = bit!(4);
+        const SampleRate    = bit!(2);
+        const Stereo        = bit!(0);
+    }
+}
+
 // Internal.
 impl CDROM {
     fn check_irq(&mut self) -> bool {
@@ -272,7 +289,7 @@ impl CDROM {
     }
 
     fn write_command(&mut self, data: u8) {
-        self.counter = 50000; // wait some arbitrary amount of time TODO: make this more accurate
+        self.counter = 150000; // wait some arbitrary amount of time TODO: make this more accurate
         self.response_count = 0;
         self.command = data;
         self.status.insert(Status::Busy);
@@ -284,7 +301,7 @@ impl CDROM {
         }
         self.param_fifo.push_back(data);
         self.status.remove(Status::ParamFifoEmpty);
-        self.status.set(Status::ParamFifoFull, self.param_fifo.len() < 16);
+        self.status.set(Status::ParamFifoNotFull, self.param_fifo.len() < 16);
     }
 
     fn read_parameter(&mut self) -> DriveResult<u8> {
@@ -292,7 +309,7 @@ impl CDROM {
         if let Some(param) = param {
             self.status.set(Status::ParamFifoEmpty, self.param_fifo.is_empty());
             if self.param_fifo.len() < 16 {
-                self.status.insert(Status::ParamFifoFull);
+                self.status.insert(Status::ParamFifoNotFull);
             }
             Ok(param)
         } else {
@@ -315,7 +332,7 @@ impl CDROM {
         if data_in.contains(IntFlags::ResetParamFIFO) {
             self.param_fifo.clear();
             self.status.insert(Status::ParamFifoEmpty);
-            self.status.insert(Status::ParamFifoFull);
+            self.status.insert(Status::ParamFifoNotFull);
         }
         self.int_flags.remove(data_in);
         self.int_flags.insert(IntFlags::Unused);
@@ -324,7 +341,7 @@ impl CDROM {
     fn read_response(&mut self) -> u8 {
         let data = self.response_fifo.pop_front();
         if self.response_fifo.is_empty() {
-            self.status.remove(Status::ResFifoEmpty);
+            self.status.remove(Status::ResFifoNotEmpty);
         }
         data.unwrap_or(0)
     }
@@ -334,14 +351,14 @@ impl CDROM {
     /// Also sets interrupt bits. Int should be a value 1-7.
     fn send_response(&mut self, data: u8, int: u8) {
         self.response_fifo.push_back(data);
-        self.status.insert(Status::ResFifoEmpty);
+        self.status.insert(Status::ResFifoNotEmpty);
         self.int_flags.remove(IntFlags::Response);
         self.int_flags.insert(IntFlags::from_bits_truncate(int));
     }
 
     /// Indicate first response has been sent.
     fn first_response(&mut self) -> DriveResult<()> {
-        self.counter = 50000;
+        self.counter = 150000;
         self.response_count += 1;
         Ok(())
     }
@@ -358,18 +375,28 @@ impl CDROM {
         self.sector_offset += 1;
         self.data_fifo_size -= 1;
         if self.data_fifo_size == 0 {
-            self.counter = 50000;
-            self.status.remove(Status::DataFifoEmpty);
+            self.counter = 150000;
+            self.status.remove(Status::DataFifoNotEmpty);
             self.seek_file_offset += SECTOR_SIZE;
         }
         data
     }
 
     /// Read a sector.
-    fn read_sector(&mut self) {
+    /// 
+    /// Returns true if the sector is read as data,
+    /// and as such we need to trigger interrupt 1.
+    fn read_sector(&mut self) -> bool {
         // Check if we need to load from disc.
         println!("CD read @ {:X}", self.seek_file_offset);
         self.read_from_file();
+        if self.send_xa_adpcm_sector() {
+            // TODO: actually process this...
+            self.counter = 150000;
+            self.seek_file_offset += SECTOR_SIZE;
+            return false;
+        }
+        // Send as data.
         let start_pos = self.seek_file_offset - self.buffer_file_offset;
         if self.mode.contains(DriveMode::SectorSize) {
             self.sector_offset = start_pos + SECTOR_SYNC_BYTES;
@@ -378,7 +405,37 @@ impl CDROM {
             self.sector_offset = start_pos + SECTOR_HEADER;
             self.data_fifo_size = SECTOR_DATA;
         }
-        self.status.insert(Status::DataFifoEmpty);
+        self.status.insert(Status::DataFifoNotEmpty);
+        true
+    }
+
+    /// Try and send the read sector as XA-ADPCM to SPU.
+    /// 
+    /// The sector might not be ADPCM, in which case, this
+    /// will return false.
+    fn send_xa_adpcm_sector(&mut self) -> bool {
+        let start_pos = self.seek_file_offset - self.buffer_file_offset;
+        if self.mode.contains(DriveMode::XAADPCM) {
+            let subheader_idx = (start_pos + 0x10) as usize;
+            let file_number = self.buffer[subheader_idx];
+            let channel_number = self.buffer[subheader_idx + 1];
+            let submode = CDSectorSubmode::from_bits_truncate(self.buffer[subheader_idx + 2]);
+            let coding_info = self.buffer[subheader_idx + 3];
+            //println!("try XA-ADPCM: {:X} {:X} {:X} {:X}", file_number, channel_number, submode, coding_info);
+            if self.mode.contains(DriveMode::XAFilter) {
+                if file_number != self.file_filter ||
+                    channel_number != self.channel_filter {
+                    return false;
+                }
+            }
+            if !submode.contains(CDSectorSubmode::Audio | CDSectorSubmode::RealTime) {
+                return false;
+            }
+            self.status.insert(Status::ADPBusy);
+            true
+        } else {
+            false
+        }
     }
 
     /// Read from disc into buffer, if necessary.
@@ -523,8 +580,8 @@ impl CDROM {
     }
 
     fn set_filter(&mut self) -> DriveResult<()> {
-        let _file = self.read_parameter()?;
-        let _channel = self.read_parameter()?;
+        self.file_filter = self.read_parameter()?;
+        self.channel_filter = self.read_parameter()?;
         self.send_response(self.drive_status.bits(), 3);
         self.command_complete()
     }
@@ -675,8 +732,9 @@ impl CDROM {
                 }
                 self.drive_status.remove(DriveStatus::ReadBits);
                 self.drive_status.insert(DriveStatus::Reading);
-                self.read_sector();
-                self.send_response(self.drive_status.bits(), 1);
+                if self.read_sector() {
+                    self.send_response(self.drive_status.bits(), 1);
+                }
                 self.command_complete()
             }
         }
@@ -834,5 +892,19 @@ impl CDROM {
         // TODO: start audio streaming..?
         self.send_response(self.drive_status.bits(), 3);
         self.command_complete()
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    struct CDSectorSubmode: u8 {
+        const EOF       = bit!(7);
+        const RealTime  = bit!(6);
+        const Form2     = bit!(5);
+        const Trigger   = bit!(4);
+        const Data      = bit!(3);
+        const Audio     = bit!(2);
+        const Video     = bit!(1);
+        const EOR       = bit!(0);
     }
 }
