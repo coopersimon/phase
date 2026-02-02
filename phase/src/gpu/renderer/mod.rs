@@ -111,7 +111,7 @@ impl Renderer {
     fn send_frame(&mut self, interlace_state: InterlaceState) {
         {
             let mut frame = self.frame.lock().unwrap();
-            self.renderer.get_frame(&mut frame, interlace_state);
+            self.renderer.get_frame(&mut frame, interlace_state, self.status.contains(GPUStatus::ColorDepth));
         }
         let _ = self.frame_tx.send(());
     }
@@ -610,7 +610,7 @@ impl Renderer {
 
     fn set_draw_offset(&mut self, param: u32) {
         let x = (param & 0x7FF) as i16;
-        let y = ((param >> 10) & 0x7FF) as i16;
+        let y = ((param >> 11) & 0x7FF) as i16;
         let signed_x = (x << 5) >> 5;
         let signed_y = (y << 5) >> 5;
         self.renderer.set_draw_area_offset(signed_x, signed_y);
@@ -688,7 +688,7 @@ impl GPUStatus {
 trait RendererImpl {
     /// The frame provided should be of the correct resolution.
     /// It is of format BGRA U8.
-    fn get_frame(&mut self, frame: &mut Frame, interlace: InterlaceState);
+    fn get_frame(&mut self, frame: &mut Frame, interlace: InterlaceState, rgb24: bool);
 
     fn write_vram_block(&mut self, data_in: &[u16], to: Coord, size: Size);
     fn read_vram_block(&mut self, data_out: &mut [u16], from: Coord, size: Size);

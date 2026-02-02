@@ -11,7 +11,7 @@ pub enum MDECStatus {
     DataOutReady,
 }
 
-/// Media decoder.
+/// Motion decoder.
 /// This handles video decoding.
 pub struct MDEC {
     status:                 Status,
@@ -24,6 +24,12 @@ pub struct MDEC {
 
     in_fifo:                VecDeque<u16>,
     out_fifo:               VecDeque<u32>,
+
+    /// DMA re-orders RGB15 and RGB24 blocks.
+    /// If this is set to Some, it marks the width (in words)
+    /// of an 8-pixel row.
+    use_reorder:            Option<usize>,
+    dma_reorder_fifo:       VecDeque<u32>,
 
     current_block:          Block,
     cr_block:               [i16; 64],
@@ -43,6 +49,9 @@ impl MDEC {
 
             in_fifo:                VecDeque::new(),
             out_fifo:               VecDeque::new(),
+
+            use_reorder:            None,
+            dma_reorder_fifo:       VecDeque::new(),
 
             current_block:          Block::None,
             cr_block:               [0; 64],
@@ -106,7 +115,26 @@ impl MemInterface for MDEC {
 
 impl DMADevice for MDEC {
     fn dma_read_word(&mut self) -> Data<u32> {
-        let data = self.read_data();
+        let data = if let Some(row_words) = self.use_reorder {
+            if self.dma_reorder_fifo.is_empty() {
+                let block_size = 8 * row_words;
+                let reorder_words = block_size * 2;
+                for row in 0..8 {
+                    for word in 0..row_words {
+                        let data = self.out_fifo[word + row * row_words];
+                        self.dma_reorder_fifo.push_back(data);
+                    }
+                    for word in 0..row_words {
+                        let data = self.out_fifo[block_size + word + row * row_words];
+                        self.dma_reorder_fifo.push_back(data);
+                    }
+                }
+                self.out_fifo.drain(0..reorder_words);
+            }
+            self.dma_reorder_fifo.pop_front().unwrap()
+        } else {
+            self.read_data()
+        };
         Data { data, cycles: 1 }
     }
 
@@ -356,14 +384,14 @@ impl MDEC {
                         self.current_block = Block::Y1;
                     },
                     Block::Y1 => {
-                        let Some(rgb) = self.process_rgb(!signed, 0, 8) else {
+                        let Some(rgb) = self.process_rgb(!signed, 8, 0) else {
                             panic!("mdec: aborting during y processing");
                         };
                         self.output_rgb15(&rgb, set_bit_15);
                         self.current_block = Block::Y2;
                     },
                     Block::Y2 => {
-                        let Some(rgb) = self.process_rgb(!signed, 8, 0) else {
+                        let Some(rgb) = self.process_rgb(!signed, 0, 8) else {
                             panic!("mdec: aborting during y processing");
                         };
                         self.output_rgb15(&rgb, set_bit_15);
@@ -403,14 +431,14 @@ impl MDEC {
                         self.current_block = Block::Y1;
                     },
                     Block::Y1 => {
-                        let Some(rgb) = self.process_rgb(!signed, 0, 8) else {
+                        let Some(rgb) = self.process_rgb(!signed, 8, 0) else {
                             panic!("mdec: aborting during y processing");
                         };
                         self.output_rgb24(&rgb);
                         self.current_block = Block::Y2;
                     },
                     Block::Y2 => {
-                        let Some(rgb) = self.process_rgb(!signed, 8, 0) else {
+                        let Some(rgb) = self.process_rgb(!signed, 0, 8) else {
                             panic!("mdec: aborting during y processing");
                         };
                         self.output_rgb24(&rgb);
@@ -473,13 +501,13 @@ impl MDEC {
     }
 
     fn output_rgb24(&mut self, rgb: &[u8]) {
-        for i in 0..64 {
-            let rgb_index = i * 3;
+        for i in 0..48 {
+            let rgb_index = i * 4;
             let data = u32::from_le_bytes([
                 rgb[rgb_index],
                 rgb[rgb_index + 1],
                 rgb[rgb_index + 2],
-                0x00 // TODO: Do we set a bit here?
+                rgb[rgb_index + 3],
             ]);
             self.out_fifo.push_back(data);
         }
@@ -513,6 +541,16 @@ impl MDEC {
     }
 
     fn finish_command(&mut self) {
+        if let Some(command) = self.command {
+            match command {
+                Command::DecodeMacroblock { output_depth, .. } => match output_depth {
+                    OutputDepth::Mono4 | OutputDepth::Mono8 => self.use_reorder = None,
+                    OutputDepth::RGB15 => self.use_reorder = Some(4),
+                    OutputDepth::RGB24 => self.use_reorder = Some(6),
+                },
+                _ => self.use_reorder = None,
+            }
+        }
         self.command = None;
         self.status.remove(Status::CommandBusy | Status::CurrentBlock);
         self.current_block = Block::None;
@@ -578,7 +616,7 @@ fn process_core(block: &mut [i16], scale_table: &[i16; 64]) {
             let col_offset = y * 8;
             for x in 0..8 {
                 let sum = (0..64).step_by(8).fold(0, |acc, z| {
-                    let n = (src[z + y] as i32 * scale_table[z + x] as i32) / 8;
+                    let n = src[z + y] as i32 * (scale_table[z + x] as i32 / 8);
                     acc + n
                 });
                 dst[col_offset + x] = ((sum + 0xFFF) / 0x2000) as i16;

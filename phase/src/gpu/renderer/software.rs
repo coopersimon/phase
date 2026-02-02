@@ -50,7 +50,7 @@ impl SoftwareRenderer {
 }
 
 impl RendererImpl for SoftwareRenderer {
-    fn get_frame(&mut self, frame: &mut Frame, interlace_state: InterlaceState) {
+    fn get_frame(&mut self, frame: &mut Frame, interlace_state: InterlaceState, rgb24: bool) {
         if self.enable_display {
             let line_size = (self.resolution.width as usize) * 4;
             for y in 0..240 {
@@ -61,15 +61,30 @@ impl RendererImpl for SoftwareRenderer {
                 };
                 let mut frame_idx = y * line_size;
                 let mut vram_addr = Coord {x: self.frame_pos.x, y: self.frame_pos.y + (y as i16)}.get_vram_idx();
-                //let mut vram_addr = Coord {x: 0, y: y as i16}.get_vram_idx();
-                for _ in 0..self.resolution.width {
-                    let pixel = self.vram[vram_addr];
-                    let col = Color::from_rgb15(pixel);
-                    frame.frame_buffer[frame_idx + 0] = col.r;
-                    frame.frame_buffer[frame_idx + 1] = col.g;
-                    frame.frame_buffer[frame_idx + 2] = col.b;
-                    frame_idx += 4;
-                    vram_addr += 1;
+                if rgb24 {
+                    for _ in 0..(self.resolution.width / 2) {
+                        let h0 = self.vram[vram_addr + 0];
+                        let h1 = self.vram[vram_addr + 1];
+                        let h2 = self.vram[vram_addr + 2];
+                        frame.frame_buffer[frame_idx + 0] = h0 as u8;
+                        frame.frame_buffer[frame_idx + 1] = (h0 >> 8) as u8;
+                        frame.frame_buffer[frame_idx + 2] = h1 as u8;
+                        frame.frame_buffer[frame_idx + 4] = (h1 >> 8) as u8;
+                        frame.frame_buffer[frame_idx + 5] = h2 as u8;
+                        frame.frame_buffer[frame_idx + 6] = (h2 >> 8) as u8;
+                        vram_addr += 3;
+                        frame_idx += 8;
+                    }
+                } else {
+                    for _ in 0..self.resolution.width {
+                        let pixel = self.vram[vram_addr];
+                        let col = Color::from_rgb15(pixel);
+                        frame.frame_buffer[frame_idx + 0] = col.r;
+                        frame.frame_buffer[frame_idx + 1] = col.g;
+                        frame.frame_buffer[frame_idx + 2] = col.b;
+                        vram_addr += 1;
+                        frame_idx += 4;
+                    }
                 }
             }
         } else {
@@ -240,7 +255,7 @@ impl SoftwareRenderer {
         //min_y = min_y.max(self.drawing_area.top);
         //max_y = max_y.min(self.drawing_area.bottom);
         let Some(mut lines) = Self::get_intersection_points(vertices, min_y) else {
-            panic!("no intersection points found"); // TODO: just return?
+            //println!("No intersection points found");
             return;
         };
         //println!("Line 0 (tex) {:X},{:X} => {:X},{:X}", lines.left.tex_s, lines.left.tex_t, lines.right.tex_s, lines.right.tex_t);
@@ -272,7 +287,13 @@ impl SoftwareRenderer {
             let right = lines.right.get_x() + self.draw_offset.x;
             let min_x = left.max(self.drawing_area.left);
             let max_x = right.min(self.drawing_area.right);
-            if min_x != max_x {
+            /*if lines.left.get_x() < 0 && lines.right.get_x() < 0 {
+                println!("drawing {}->{} (offset: {}->{}, clipped: {}->{})", lines.left.get_x(), lines.right.get_x(), left, right, min_x, max_x);
+            }
+            else if lines.left.get_x() < 0 && lines.right.get_x() >= 0 {
+                println!("drawinf {}->{} (offset: {}->{}, clipped: {}->{})", lines.left.get_x(), lines.right.get_x(), left, right, min_x, max_x);
+            }*/
+            if lines.left.get_x() != lines.right.get_x() {
                 let line_addr = (y as usize) * 1024;
                 let mut line = Line::from_lines(&lines.left, &lines.right, lines.left.get_x());
                 if left < self.drawing_area.left {
