@@ -11,16 +11,16 @@ Below is a list of selected games and their status.
 - Crash Bandicoot 2: Crashes trying to draw line
 - Crash Bandicoot 3: Peripheral error (multitap?)
 - Crash Team Racing: Tries to stream ADPCM from CD and locks up.
-- Final Fantasy 7: MDEC crash
-- Final Fantasy Tactics: Flashes a bit then MDEC crash.
-- Gran Turismo: Crashes trying to use nonsense GPU command. If this is ignored, MDEC crash.
+- Final Fantasy 7: Gets to main menu, then CD streaming issue.
+- Final Fantasy Tactics: Flashes a bit (titles) then CD streaming issue.
+- Gran Turismo: Crashes trying to use nonsense GPU command. If this is ignored, CD streaming issue.
 - Metal Gear Solid: Waiting for SPU interrupt. Also segfaults (???)
-- Resident Evil: MDEC crash
-- Resident Evil 2: MDEC crash
-- Suikoden: MDEC crash
-- Tekken 3: Some titles then MDEC crash.
-- Tony Hawk's Pro Skater 2: MDEC crash
-- Wild ARMS: Some titles then MDEC crash. If skipped line drawing crash.
+- Resident Evil: Write VRAM block out of bounds (might require wrapping)
+- Resident Evil 2: Displays a still image, then loops reading the CD. Seems to get stuck spamming cd interrupt?
+- Suikoden: Crashes reading a nonsense address.
+- Tekken 3: Some titles then MDEC issues. Seems able to stream from CD.
+- Tony Hawk's Pro Skater 2: Issue streaming from CD.
+- Wild ARMS: Some titles then streaming from CD. If skipped line drawing crash.
 
 ## TODO list
 

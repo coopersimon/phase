@@ -8,6 +8,7 @@ mod expansion;
 mod spu;
 mod gpu;
 mod peripheral;
+mod mdec;
 mod utils;
 mod io;
 

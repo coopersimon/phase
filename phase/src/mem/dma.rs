@@ -62,9 +62,11 @@ impl DMA {
         }
     }
 
-    pub fn mdec_req(&mut self) {
-        // TODO: this should be 2 different functions probably...
+    pub fn mdec_recv_req(&mut self) {
         self.channels[0].start_sync_mode(DMA_REQ_MODE);
+    }
+
+    pub fn mdec_send_req(&mut self) {
         self.channels[1].start_sync_mode(DMA_REQ_MODE);
     }
 

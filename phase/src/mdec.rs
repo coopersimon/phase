@@ -1,0 +1,607 @@
+use mips::mem::Data;
+use crate::{
+    mem::DMADevice,
+    utils::{bits::*, interface::MemInterface}
+};
+use std::collections::VecDeque;
+
+pub enum MDECStatus {
+    None,
+    DataInReady,
+    DataOutReady,
+}
+
+/// Media decoder.
+/// This handles video decoding.
+pub struct MDEC {
+    status:                 Status,
+    command:                Option<Command>,
+    param_words_remaining:  u16,
+
+    luminance_quant_table:  [u8; 64],
+    color_quant_table:      [u8; 64],
+    scale_table:            [i16; 64],
+
+    in_fifo:                VecDeque<u32>,
+    out_fifo:               VecDeque<u32>,
+
+    current_block:          Block,
+    cr_block:               [i16; 64],
+    cb_block:               [i16; 64],
+}
+
+impl MDEC {
+    pub fn new() -> Self {
+        Self {
+            status: Status::Init,
+            command: None,
+            param_words_remaining: 0,
+
+            luminance_quant_table:  [0; 64],
+            color_quant_table:      [0; 64],
+            scale_table:            [0; 64],
+
+            in_fifo:                VecDeque::new(),
+            out_fifo:               VecDeque::new(),
+
+            current_block:          Block::None,
+            cr_block:               [0; 64],
+            cb_block:               [0; 64],
+        }
+    }
+
+    pub fn clock(&mut self, _cycles: usize) -> MDECStatus {
+        if let Some(command) = self.command {
+            if self.param_words_remaining == 0 {
+                use Command::*;
+                match command {
+                    DecodeMacroblock { output_depth, signed, set_bit_15 } => self.decode_macroblock(output_depth, signed, set_bit_15),
+                    SetQuantTable { use_color } => self.set_quant_table(use_color),
+                    SetScaleTable => self.set_scale_table(),
+                }
+                self.status.remove(Status::DataInFifoFull);
+            }
+            // TODO: check bits instead?
+            if self.param_words_remaining > 0 {
+                MDECStatus::DataInReady
+            } else if !self.out_fifo.is_empty() {
+                MDECStatus::DataOutReady
+            } else {
+                MDECStatus::None
+            }
+        } else {
+            MDECStatus::None
+        }
+    }
+}
+
+impl MemInterface for MDEC {
+    fn read_word(&mut self, addr: u32) -> u32 {
+        let data = match addr {
+            0x1F80_1820 => self.read_data(),
+            0x1F80_1824 => self.read_status(),
+            _ => panic!("invalid MDEC read address"),
+        };
+        println!("read mdec {:X} from {:X}", data, addr);
+        data
+    }
+
+    fn write_word(&mut self, addr: u32, data: u32) {
+        println!("write mdec {:X} to {:X}", data, addr);
+        match addr {
+            0x1F80_1820 => self.write_command(data),
+            0x1F80_1824 => self.write_control(data),
+            _ => panic!("invalid MDEC write address"),
+        }
+    }
+}
+
+impl DMADevice for MDEC {
+    fn dma_read_word(&mut self) -> Data<u32> {
+        let data = self.read_data();
+        Data { data, cycles: 1 }
+    }
+
+    fn dma_write_word(&mut self, data: u32) -> usize {
+        self.write_command(data);
+        1
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    struct Status: u32 {
+        const DataOutFifoEmpty  = bit!(31);
+        const DataInFifoFull    = bit!(30);
+        const CommandBusy       = bit!(29);
+        const DataInReq         = bit!(28);
+        const DataOutReq        = bit!(27);
+        const DataOutputDepth   = bits![25, 26];
+        const DataOutSigned     = bit!(24);
+        const DataOutBit15      = bit!(23);
+        const CurrentBlock      = bits![16, 17, 18];
+
+        const Init = bits![31, 18];
+
+        // Block modes:
+        const Mono = bit!(18);
+        const Cr = bits![18];
+        const Cb = bits![16, 18];
+        const Y0 = 0;
+        const Y1 = bits![16];
+        const Y2 = bits![17];
+        const Y3 = bits![16, 17];
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    struct Control: u32 {
+        const Reset         = bit!(31);
+        const EnableDataIn  = bit!(30);
+        const EnableDataOut = bit!(29);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OutputDepth {
+    Mono4,
+    Mono8,
+    RGB15,
+    RGB24
+}
+
+/// MDEC commands.
+#[derive(Clone, Copy)]
+enum Command {
+    DecodeMacroblock{output_depth: OutputDepth, signed: bool, set_bit_15: bool},
+    SetQuantTable{use_color: bool},
+    SetScaleTable,
+}
+
+#[derive(Clone, Copy)]
+enum Block {
+    None,
+    Cr,
+    Cb,
+    Y0,
+    Y1,
+    Y2,
+    Y3,
+}
+
+impl Block {
+    fn to_status_bits(&self) -> Status {
+        use Block::*;
+        match self {
+            None => Status::empty(),
+            Cr => Status::Cr,
+            Cb => Status::Cb,
+            Y0 => Status::Y0,
+            Y1 => Status::Y1,
+            Y2 => Status::Y2,
+            Y3 => Status::Y3,
+        }
+    }
+}
+
+impl Command {
+    fn decode(data: u32) -> Command {
+        use Command::*;
+        let command = data >> 29;
+        match command {
+            1 => {
+                let output_depth = match (data >> 27) & 0x3 {
+                    0b00 => OutputDepth::Mono4,
+                    0b01 => OutputDepth::Mono8,
+                    0b10 => OutputDepth::RGB24,
+                    0b11 => OutputDepth::RGB15,
+                    _ => unreachable!()
+                };
+                DecodeMacroblock{output_depth, signed: test_bit!(data, 26), set_bit_15: test_bit!(data, 25)}
+            },
+            2 => SetQuantTable { use_color: test_bit!(data, 0) },
+            3 => SetScaleTable,
+            _ => panic!("unrecognised MDEC command"),
+        }
+    }
+
+    fn word_count(&self) -> u16 {
+        use Command::*;
+        match self {
+            DecodeMacroblock { .. } => 32, // Chunks of 32 words.
+            SetQuantTable { use_color } => if *use_color {32} else {16},
+            SetScaleTable => 32,
+        }
+    }
+}
+
+#[inline(always)]
+const fn sign_extend_10(val: u16) -> i16 {
+    (val << 6) as i16 >> 6
+}
+
+/// Combine the high nybbles of two values
+/// to make a single 8-bit value.
+#[inline(always)]
+const fn combine_u8(lo: u8, hi: u8) -> u8 {
+    (lo >> 4) | (hi & 0xF0)
+}
+
+/// Combine RGB values into a single halfword.
+#[inline(always)]
+const fn rgb_24_to_15(r: u8, g: u8, b: u8, hi: u16) -> u16 {
+    ((r as u16) >> 3) |
+    (((g as u16) >> 3) << 5) |
+    (((b as u16) >> 3) << 10) |
+    hi
+}
+
+// Internal
+impl MDEC {
+    fn read_data(&mut self) -> u32 {
+        let data = self.out_fifo.pop_front().unwrap_or(0);
+        if self.out_fifo.is_empty() {
+            self.status.insert(Status::DataOutFifoEmpty);
+        }
+        println!("mdec read {:X}", data);
+        data
+    }
+
+    fn read_status(&self) -> u32 {
+        let param_words = self.param_words_remaining.wrapping_sub(1) as u32;
+        let current_mode = self.current_block.to_status_bits();
+        (self.status | current_mode).bits() | param_words
+    }
+
+    fn write_control(&mut self, data: u32) {
+        let control = Control::from_bits_truncate(data);
+        if control.contains(Control::Reset) {
+            self.command = None;
+            self.param_words_remaining = 0;
+            self.status = Status::Init;
+        }
+        if control.contains(Control::EnableDataIn) {
+            self.status.insert(Status::DataInReq);
+        }
+        if control.contains(Control::EnableDataOut) {
+            self.status.insert(Status::DataOutReq);
+        }
+    }
+
+    fn write_command(&mut self, data: u32) {
+        println!("mdec write {:X}", data);
+        if self.command.is_some() {
+            self.in_fifo.push_back(data);
+            self.param_words_remaining -= 1;
+            if self.param_words_remaining == 0 {
+                self.status.insert(Status::DataInFifoFull);
+            }
+        } else {
+            self.start_command(data);
+        }
+    }
+
+    fn start_command(&mut self, data: u32) {
+        let command = Command::decode(data);
+        self.param_words_remaining = command.word_count();
+        self.command = Some(command);
+        self.status.insert(Status::CommandBusy | Status::Mono);
+        self.current_block = Block::Cr;
+    }
+
+    /// This function will be called repeatedly for every input data chunk.
+    /// Each input data chunk should be 32 words.
+    fn decode_macroblock(&mut self, output_depth: OutputDepth, signed: bool, set_bit_15: bool) {
+        let mut block = [0_u16; 64];
+        for i in 0..32 {
+            let data = self.in_fifo.pop_front().expect("not enough data in mdec fifo");
+            block[i * 2] = data as u16;
+            block[i * 2 + 1] = (data >> 16) as u16;
+        }
+        match output_depth {
+            OutputDepth::Mono4 => {
+                let mono_out = self.process_mono(&block, !signed);
+                for i in 0..8 {
+                    let index = i * 8;
+                    let word = u32::from_le_bytes([
+                        combine_u8(mono_out[index], mono_out[index + 1]),
+                        combine_u8(mono_out[index + 2], mono_out[index + 3]),
+                        combine_u8(mono_out[index + 4], mono_out[index + 5]),
+                        combine_u8(mono_out[index + 6], mono_out[index + 7]),
+                    ]);
+                    self.out_fifo.push_back(word);
+                }
+                self.status.remove(Status::DataOutFifoEmpty);
+                self.finish_command();
+            },
+            OutputDepth::Mono8 => {
+                let mono_out = self.process_mono(&block, !signed);
+                for i in 0..16 {
+                    let index = i * 4;
+                    let word = u32::from_le_bytes([
+                        mono_out[index],
+                        mono_out[index + 1],
+                        mono_out[index + 2],
+                        mono_out[index + 3],
+                    ]);
+                    self.out_fifo.push_back(word);
+                }
+                self.status.remove(Status::DataOutFifoEmpty);
+                self.finish_command();
+            },
+            OutputDepth::RGB15 => {
+                match self.current_block {
+                    Block::None => panic!("block set to none"),
+                    Block::Cr => {
+                        decode_block(&block, &self.color_quant_table, &self.scale_table, &mut self.cr_block);
+                        self.current_block = Block::Cb;
+                    },
+                    Block::Cb => {
+                        decode_block(&block, &self.color_quant_table, &self.scale_table, &mut self.cb_block);
+                        self.current_block = Block::Y0;
+                    },
+                    Block::Y0 => {
+                        let rgb = self.process_rgb(&block, !signed, 0, 0);
+                        self.output_rgb15(&rgb, set_bit_15);
+                        self.current_block = Block::Y1;
+                    },
+                    Block::Y1 => {
+                        let rgb = self.process_rgb(&block, !signed, 0, 8);
+                        self.output_rgb15(&rgb, set_bit_15);
+                        self.current_block = Block::Y2;
+                    },
+                    Block::Y2 => {
+                        let rgb = self.process_rgb(&block, !signed, 8, 0);
+                        self.output_rgb15(&rgb, set_bit_15);
+                        self.current_block = Block::Y3;
+                    },
+                    Block::Y3 => {
+                        let rgb = self.process_rgb(&block, !signed, 8, 8);
+                        self.output_rgb15(&rgb, set_bit_15);
+                        self.finish_command();
+                    },
+                }
+            },
+            OutputDepth::RGB24 => {
+                match self.current_block {
+                    Block::None => panic!("block set to none"),
+                    Block::Cr => {
+                        self.cr_block.fill(0);
+                        decode_block(&block, &self.color_quant_table, &self.scale_table, &mut self.cr_block);
+                        self.current_block = Block::Cb;
+                    },
+                    Block::Cb => {
+                        self.cb_block.fill(0);
+                        decode_block(&block, &self.color_quant_table, &self.scale_table, &mut self.cb_block);
+                        self.current_block = Block::Y0;
+                    },
+                    Block::Y0 => {
+                        let rgb = self.process_rgb(&block, !signed, 0, 0);
+                        self.output_rgb24(&rgb);
+                        self.current_block = Block::Y1;
+                    },
+                    Block::Y1 => {
+                        let rgb = self.process_rgb(&block, !signed, 0, 8);
+                        self.output_rgb24(&rgb);
+                        self.current_block = Block::Y2;
+                    },
+                    Block::Y2 => {
+                        let rgb = self.process_rgb(&block, !signed, 8, 0);
+                        self.output_rgb24(&rgb);
+                        self.current_block = Block::Y3;
+                    },
+                    Block::Y3 => {
+                        let rgb = self.process_rgb(&block, !signed, 8, 8);
+                        self.output_rgb24(&rgb);
+                        self.finish_command();
+                    },
+                }
+            },
+        }
+    }
+
+    fn process_mono(&self, block_in: &[u16], unsigned: bool) -> [u8; 64] {
+        let mut y_block = [0_i16; 64];
+        decode_block(&block_in, &self.luminance_quant_table, &self.scale_table, &mut y_block);
+        let mut mono_out = [0_u8; 64];
+        y_to_mono(&y_block, unsigned, &mut mono_out);
+        mono_out
+    }
+
+    fn process_rgb(&self, block_in: &[u16], unsigned: bool, x_offset: usize, y_offset: usize) -> [u8; 64 * 3] {
+        let mut y_block = [0_i16; 64];
+        decode_block(&block_in, &self.color_quant_table, &self.scale_table, &mut y_block);
+        let mut rgb_out = [0_u8; 64 * 3];
+        yuv_to_rgb(&y_block, &self.cr_block, &self.cb_block, unsigned, x_offset, y_offset, &mut rgb_out);
+        rgb_out
+    }
+
+    fn output_rgb15(&mut self, rgb: &[u8], set_bit_15: bool) {
+        let hi = if set_bit_15 {0x8000} else {0};
+        for i in 0..32 {
+            let rgb_index = i * 6;
+            let lo = {
+                let r = rgb[rgb_index];
+                let g = rgb[rgb_index + 1];
+                let b = rgb[rgb_index + 2];
+                rgb_24_to_15(r, g, b, hi)
+            };
+            let hi = {
+                let r = rgb[rgb_index + 3];
+                let g = rgb[rgb_index + 4];
+                let b = rgb[rgb_index + 5];
+                rgb_24_to_15(r, g, b, hi)
+            };
+            let data = (lo as u32) | ((hi as u32) << 16);
+            self.out_fifo.push_back(data);
+        }
+        self.status.remove(Status::DataOutFifoEmpty);
+    }
+
+    fn output_rgb24(&mut self, rgb: &[u8]) {
+        // TODO: unsure about the exact format here.
+        for i in 0..48 {
+            let rgb_index = i * 4;
+            let data = u32::from_le_bytes([
+                rgb[rgb_index],
+                rgb[rgb_index + 1],
+                rgb[rgb_index + 2],
+                rgb[rgb_index + 3]
+            ]);
+            self.out_fifo.push_back(data);
+        }
+        self.status.remove(Status::DataOutFifoEmpty);
+    }
+
+    fn set_quant_table(&mut self, use_color: bool) {
+        for i in 0..16 {
+            let data = self.in_fifo.pop_front().expect("not enough data in mdec fifo!");
+            let bytes = data.to_le_bytes();
+            let index = i * 4;
+            self.luminance_quant_table[index] = bytes[0];
+            self.luminance_quant_table[index + 1] = bytes[1];
+            self.luminance_quant_table[index + 2] = bytes[2];
+            self.luminance_quant_table[index + 3] = bytes[3];
+        }
+        if use_color {
+            for i in 0..16 {
+                let data = self.in_fifo.pop_front().expect("not enough data in mdec fifo!");
+                let bytes = data.to_le_bytes();
+                let index = i * 4;
+                self.color_quant_table[index] = bytes[0];
+                self.color_quant_table[index + 1] = bytes[1];
+                self.color_quant_table[index + 2] = bytes[2];
+                self.color_quant_table[index + 3] = bytes[3];
+            }
+        }
+        self.finish_command();
+    }
+
+    fn set_scale_table(&mut self) {
+        for i in 0..32 {
+            let data = self.in_fifo.pop_front().expect("not enough data in mdec fifo!");
+            let lo = (data & 0xFFFF) as i16;
+            let hi = (data >> 16) as i16;
+            let index = i * 2;
+            self.scale_table[index] = lo;
+            self.scale_table[index + 1] = hi;
+        }
+        self.finish_command();
+    }
+
+    fn finish_command(&mut self) {
+        self.command = None;
+        self.status.remove(Status::CommandBusy | Status::CurrentBlock);
+        self.current_block = Block::None;
+    }
+}
+
+const ZAGZIG: [usize; 64] = [
+    0, 1, 8, 16, 9, 2, 3, 10,
+    17, 24, 32, 25, 18, 11, 4, 5,
+    12, 19, 26, 33, 40, 48, 41, 34,
+    27, 20, 13, 6, 7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36,
+    29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46,
+    53, 60, 61, 54, 47, 55, 62, 63
+];
+
+fn decode_block(block: &[u16], quant_table: &[u8; 64], scale_table: &[i16; 64], block_out: &mut [i16]) {
+    //let mut block_out = [0_i16; 64];
+    let mut out_idx = 0;
+    let mut block_iter = block.iter()
+        .cloned().skip_while(|n| *n == 0xFE00);
+    let Some(first_data) = block_iter.next() else {
+        process_core(block_out, scale_table);
+        return;
+    };
+    let scale = (first_data >> 10) as i32;
+    {
+        let val = sign_extend_10(first_data);
+        if scale == 0 {
+            block_out[out_idx] = val << 1;
+        } else {
+            let val = val * quant_table[0] as i16;
+            block_out[ZAGZIG[out_idx]] = val.clamp(-0x400, 0x3FF);
+        }
+    }
+    for data in block_iter {
+        let skip = data >> 10;
+        out_idx += (skip + 1) as usize;
+        if out_idx > 63 {
+            break;
+        }
+        let val = sign_extend_10(data);
+        if scale == 0 {
+            block_out[out_idx] = val << 1;
+        } else {
+            let val = ((val as i32 * quant_table[out_idx] as i32 * scale + 4) / 8) as i16;
+            block_out[ZAGZIG[out_idx]] = val.clamp(-0x400, 0x3FF);
+        }
+    }
+    process_core(block_out, scale_table);
+}
+
+fn process_core(block: &mut [i16], scale_table: &[i16; 64]) {
+    let mut temp_buffer = [0_i16; 64];
+    let mut src = block;
+    let mut dst = temp_buffer.as_mut_slice();
+    for _ in 0..2 {
+        for y in 0..8 {
+            let col_offset = y * 8;
+            for x in 0..8 {
+                let sum = (0..64).step_by(8).fold(0, |acc, z| {
+                    let n = (src[z + y] as i32 * scale_table[z + x] as i32) / 8;
+                    acc + n
+                });
+                dst[col_offset + x] = ((sum + 0xFFF) / 0x2000) as i16;
+            }
+        }
+        let x = dst;
+        dst = src;
+        src = x;
+    }
+}
+
+fn y_to_mono(block: &[i16], unsigned: bool, out: &mut [u8]) {
+    for i in 0..64 {
+        let y = block[i] << 7 >> 7;                        // Clip to 9 bits
+        let y = y.clamp(-0x80, 0x7F) as i8 as u8; // Saturate to 8 bits
+        out[i] = if unsigned {
+            y ^ 0x80
+        } else {
+            y
+        };
+    }
+}
+
+fn yuv_to_rgb(lum: &[i16], cr: &[i16], cb: &[i16], unsigned: bool, x_offset: usize, y_offset: usize, out: &mut [u8]) {
+    for y in 0..8 {
+        let lum_y = y * 8;
+        let color_y = ((y + y_offset) >> 1) * 8;
+        for x in 0..8 {
+            let color_x = (x + x_offset) >> 1;
+            let cr_val = cr[color_y + color_x] as i32;
+            let cb_val = cb[color_y + color_x] as i32;
+            let r = (cr_val * 0x166E) >> 12; // 1.402
+            let g = ((cb_val * -0x57F) + (cr_val * -0xB6D)) >> 12; // -0.3437, -0.7143
+            let b = (cb_val * 0x1C5A) >> 12; // 1.772
+            let y_val = lum[lum_y + x];
+            let r = (r as i16 + y_val).clamp(-0x80, 0x7F) as i8 as u8;
+            let g = (g as i16 + y_val).clamp(-0x80, 0x7F) as i8 as u8;
+            let b = (b as i16 + y_val).clamp(-0x80, 0x7F) as i8 as u8;
+            let out_idx = (lum_y + x) * 3;
+            if unsigned {
+                out[out_idx] = r ^ 0x80;
+                out[out_idx + 1] = g ^ 0x80;
+                out[out_idx + 2] = b ^ 0x80;
+            } else {
+                out[out_idx] = r;
+                out[out_idx + 1] = g;
+                out[out_idx + 2] = b;
+            }
+        }
+    }
+}

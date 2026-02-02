@@ -20,6 +20,7 @@ use crate::timer::Timers;
 use crate::cdrom::CDROM;
 use crate::expansion::{ExpansionPort1, ExpansionPort2};
 use crate::peripheral::PeripheralPort;
+use crate::mdec::{MDEC, MDECStatus};
 
 pub struct MemBus {
     control: MemControl,
@@ -34,6 +35,7 @@ pub struct MemBus {
     spu:    SPU,
     gpu:    GPU,
     peripheral: PeripheralPort,
+    mdec:   MDEC,
 
     expansion_port_1: ExpansionPort1,
     expansion_port_2: ExpansionPort2,
@@ -57,6 +59,7 @@ impl MemBus {
             spu:    SPU::new(),
             gpu:    GPU::new(io.clone_frame_arc()),
             peripheral: PeripheralPort::new(),
+            mdec:   MDEC::new(),
 
             expansion_port_1: ExpansionPort1::new(),
             expansion_port_2: ExpansionPort2::new(),
@@ -76,6 +79,13 @@ impl MemBus {
         }
         if self.gpu.dma_send_ready() {
             self.dma.gpu_send_req();
+        }
+
+        let mdec_status = self.mdec.clock(cycles);
+        match mdec_status {
+            MDECStatus::DataInReady => self.dma.mdec_recv_req(),
+            MDECStatus::DataOutReady => self.dma.mdec_send_req(),
+            _ => {}
         }
 
         let dma_irq = self.dma.check_irq();
@@ -260,7 +270,9 @@ impl Mem32 for MemBus {
 impl MemBus {
     /// Mutably reference an I/O device.
     fn mut_io_device<'a>(&'a mut self, addr: u32) -> Option<&'a mut dyn MemInterface> {
-        //println!("access I/O {:X}", addr);
+        if addr != 0x1F801814 {
+            //println!("access I/O {:X}", addr);
+        }
         match addr {
             0x1F80_1000..=0x1F80_1023 => Some(&mut self.control),
             0x1F80_1040..=0x1F80_104F => Some(&mut self.peripheral),
@@ -271,7 +283,7 @@ impl MemBus {
             0x1F80_1100..=0x1F80_1129 => Some(&mut self.timers),
             0x1F80_1800..=0x1F80_1807 => Some(&mut self.cdrom),
             0x1F80_1810..=0x1F80_1817 => Some(&mut self.gpu),
-            //0x1F80_1820..=0x1F80_1827 => None, // MDEC
+            0x1F80_1820..=0x1F80_1827 => Some(&mut self.mdec),
             0x1F80_1C00..=0x1F80_1FFF => Some(&mut self.spu),
             _ => panic!("no such I/O device at {:X}", addr),
         }
@@ -280,8 +292,8 @@ impl MemBus {
     /// Mutably reference a DMA device.
     fn mut_dma_device<'a>(&'a mut self, device: usize) -> &'a mut dyn DMADevice {
         match device {
-            0 => unimplemented!("mdec DMA"),
-            1 => unimplemented!("mdec DMA"),
+            0 => &mut self.mdec,
+            1 => &mut self.mdec,
             2 => &mut self.gpu,
             3 => &mut self.cdrom,
             4 => &mut self.spu,
