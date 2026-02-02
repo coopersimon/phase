@@ -30,6 +30,10 @@ const SECTOR_HEADER: u64 = 24;
 /// Each sector contains 2048 bytes of data.
 const SECTOR_DATA: u64 = 2048;
 
+const COMMAND_CYCLES: usize = 24000;
+/// 1x read cycles
+const READ_CYCLES: usize = 451584;
+
 /// CD-ROM reader.
 pub struct CDROM {
     disc: Option<File>,
@@ -58,6 +62,7 @@ pub struct CDROM {
     mode: DriveMode,
     loc: DriveLoc,
     seeked: bool,
+    read_data_counter: usize,
 
     counter: usize,
     command: u8,
@@ -94,6 +99,7 @@ impl CDROM {
             mode: DriveMode::empty(),
             loc: DriveLoc { minute: 0, second: 0, sector: 0 },
             seeked: false,
+            read_data_counter: 0,
 
             counter: 0,
             command: 0,
@@ -125,8 +131,16 @@ impl CDROM {
         if self.counter > 0 {
             self.counter = self.counter.saturating_sub(cycles);
             if self.counter == 0 {
-                self.status.remove(Status::ADPBusy);
                 self.exec_command();
+            }
+        }
+        if self.read_data_counter > 0 {
+            self.read_data_counter = self.read_data_counter.saturating_sub(cycles);
+            if self.read_data_counter == 0 {
+                self.status.remove(Status::ADPBusy); //?
+                if self.read_sector() {
+                    self.send_response(self.drive_status.bits(), 1);
+                }
             }
         }
         if self.check_irq() {
@@ -289,7 +303,7 @@ impl CDROM {
     }
 
     fn write_command(&mut self, data: u8) {
-        self.counter = 150000; // wait some arbitrary amount of time TODO: make this more accurate
+        self.counter = COMMAND_CYCLES;
         self.response_count = 0;
         self.command = data;
         self.status.insert(Status::Busy);
@@ -358,13 +372,14 @@ impl CDROM {
 
     /// Indicate first response has been sent.
     fn first_response(&mut self) -> DriveResult<()> {
-        self.counter = 150000;
+        self.counter = COMMAND_CYCLES; // TODO: increase this if seeking/pausing
         self.response_count += 1;
         Ok(())
     }
 
     /// Indicate final response has been sent.
     fn command_complete(&mut self) -> DriveResult<()> {
+        self.command = 0;
         self.status.remove(Status::Busy);
         Ok(())
     }
@@ -375,9 +390,7 @@ impl CDROM {
         self.sector_offset += 1;
         self.data_fifo_size -= 1;
         if self.data_fifo_size == 0 {
-            self.counter = 150000;
             self.status.remove(Status::DataFifoNotEmpty);
-            self.seek_file_offset += SECTOR_SIZE;
         }
         data
     }
@@ -390,23 +403,26 @@ impl CDROM {
         // Check if we need to load from disc.
         println!("CD read @ {:X}", self.seek_file_offset);
         self.read_from_file();
-        if self.send_xa_adpcm_sector() {
+        let trigger_int_1 = if self.send_xa_adpcm_sector() {
             // TODO: actually process this...
-            self.counter = 150000;
-            self.seek_file_offset += SECTOR_SIZE;
-            return false;
-        }
-        // Send as data.
-        let start_pos = self.seek_file_offset - self.buffer_file_offset;
-        if self.mode.contains(DriveMode::SectorSize) {
-            self.sector_offset = start_pos + SECTOR_SYNC_BYTES;
-            self.data_fifo_size = SECTOR_DATA + SECTOR_SYNC_BYTES;
+            false
         } else {
-            self.sector_offset = start_pos + SECTOR_HEADER;
-            self.data_fifo_size = SECTOR_DATA;
-        }
-        self.status.insert(Status::DataFifoNotEmpty);
-        true
+            // Send as data.
+            let start_pos = self.seek_file_offset - self.buffer_file_offset;
+            if self.mode.contains(DriveMode::SectorSize) {
+                self.sector_offset = start_pos + SECTOR_SYNC_BYTES;
+                self.data_fifo_size = SECTOR_DATA + SECTOR_SYNC_BYTES;
+            } else {
+                self.sector_offset = start_pos + SECTOR_HEADER;
+                self.data_fifo_size = SECTOR_DATA;
+            }
+            self.status.insert(Status::DataFifoNotEmpty);
+            true
+        };
+        // Begin count down for the next read.
+        self.read_data_counter = if self.mode.contains(DriveMode::SectorSize) {READ_CYCLES / 2} else {READ_CYCLES};
+        self.seek_file_offset += SECTOR_SIZE;
+        trigger_int_1
     }
 
     /// Try and send the read sector as XA-ADPCM to SPU.
@@ -632,6 +648,7 @@ impl CDROM {
         match self.response_count {
             0 => {
                 self.drive_status.remove(DriveStatus::ReadBits);
+                self.read_data_counter = 0;
                 self.send_response(self.drive_status.bits(), 3);
                 self.first_response()
             },
@@ -647,6 +664,7 @@ impl CDROM {
         match self.response_count {
             0 => {
                 self.send_response(self.drive_status.bits(), 3);
+                self.read_data_counter = 0;
                 self.first_response()
             },
             _ => {
@@ -717,27 +735,17 @@ impl CDROM {
 
     /// Read with retry
     fn read_n(&mut self) -> DriveResult<()> {
-        match self.response_count {
-            0 => {
-                self.drive_status.remove(DriveStatus::ReadBits);
-                self.drive_status.insert(DriveStatus::Seeking);
-                self.send_response(self.drive_status.bits(), 3);
-                self.first_response()
-            },
-            _ => {
-                // We need to seek if we have an unprocessed seek.
-                if !self.seeked {
-                    self.seek_file_offset = self.loc.byte_offset();
-                    self.seeked = true;
-                }
-                self.drive_status.remove(DriveStatus::ReadBits);
-                self.drive_status.insert(DriveStatus::Reading);
-                if self.read_sector() {
-                    self.send_response(self.drive_status.bits(), 1);
-                }
-                self.command_complete()
-            }
+        if !self.seeked {
+            // TODO: set seek bits and wait?
+            // or at least add on extra wait cycles.
+            self.seek_file_offset = self.loc.byte_offset();
+            self.seeked = true;
         }
+        self.drive_status.remove(DriveStatus::ReadBits);
+        self.drive_status.insert(DriveStatus::Reading);
+        self.read_data_counter = if self.mode.contains(DriveMode::SectorSize) {READ_CYCLES / 2} else {READ_CYCLES};
+        self.send_response(self.drive_status.bits(), 3);
+        self.command_complete()
     }
 
     /// Read without retry
