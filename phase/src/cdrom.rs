@@ -63,6 +63,7 @@ pub struct CDROM {
     loc: DriveLoc,
     seeked: bool,
     read_data_counter: usize,
+    current_sector_header: SectorHeader,
 
     counter: usize,
     command: u8,
@@ -100,6 +101,7 @@ impl CDROM {
             loc: DriveLoc { minute: 0, second: 0, sector: 0 },
             seeked: false,
             read_data_counter: 0,
+            current_sector_header: SectorHeader::default(),
 
             counter: 0,
             command: 0,
@@ -403,12 +405,13 @@ impl CDROM {
         // Check if we need to load from disc.
         println!("CD read @ {:X}", self.seek_file_offset);
         self.read_from_file();
+        let start_pos = self.seek_file_offset - self.buffer_file_offset;
+        self.current_sector_header = SectorHeader::from_slice(&self.buffer[(SECTOR_SYNC_BYTES as usize)..]);
         let trigger_int_1 = if self.send_xa_adpcm_sector() {
             // TODO: actually process this...
             false
         } else {
             // Send as data.
-            let start_pos = self.seek_file_offset - self.buffer_file_offset;
             if self.mode.contains(DriveMode::SectorSize) {
                 self.sector_offset = start_pos + SECTOR_SYNC_BYTES;
                 self.data_fifo_size = SECTOR_DATA + SECTOR_SYNC_BYTES;
@@ -430,21 +433,15 @@ impl CDROM {
     /// The sector might not be ADPCM, in which case, this
     /// will return false.
     fn send_xa_adpcm_sector(&mut self) -> bool {
-        let start_pos = self.seek_file_offset - self.buffer_file_offset;
         if self.mode.contains(DriveMode::XAADPCM) {
-            let subheader_idx = (start_pos + 0x10) as usize;
-            let file_number = self.buffer[subheader_idx];
-            let channel_number = self.buffer[subheader_idx + 1];
-            let submode = CDSectorSubmode::from_bits_truncate(self.buffer[subheader_idx + 2]);
-            let coding_info = self.buffer[subheader_idx + 3];
             //println!("try XA-ADPCM: {:X} {:X} {:X} {:X}", file_number, channel_number, submode, coding_info);
             if self.mode.contains(DriveMode::XAFilter) {
-                if file_number != self.file_filter ||
-                    channel_number != self.channel_filter {
+                if self.current_sector_header.file != self.file_filter ||
+                    self.current_sector_header.channel != self.channel_filter {
                     return false;
                 }
             }
-            if !submode.contains(CDSectorSubmode::Audio | CDSectorSubmode::RealTime) {
+            if !self.current_sector_header.submode.contains(CDSectorSubmode::Audio | CDSectorSubmode::RealTime) {
                 return false;
             }
             self.status.insert(Status::ADPBusy);
@@ -584,6 +581,50 @@ impl DriveLoc {
         let sec_offset = (self.second as u64) * SEC_SIZE;
         let min_offset = (self.minute as u64) * MIN_SIZE;
         min_offset + sec_offset + sector_offset - ROOT_OFFSET
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Default, Clone, Copy)]
+    struct CDSectorSubmode: u8 {
+        const EOF       = bit!(7);
+        const RealTime  = bit!(6);
+        const Form2     = bit!(5);
+        const Trigger   = bit!(4);
+        const Data      = bit!(3);
+        const Audio     = bit!(2);
+        const Video     = bit!(1);
+        const EOR       = bit!(0);
+    }
+}
+
+/// The sector header appears after the sync section.
+/// The final 4 bytes are duplicated.
+#[derive(Clone, Default)]
+struct SectorHeader {
+    minute:  u8,
+    second:  u8,
+    sector:  u8,
+    mode:    u8,
+    // Subheader:
+    file:    u8,
+    channel: u8,
+    submode: CDSectorSubmode,
+    coding:  u8,
+}
+
+impl SectorHeader {
+    fn from_slice(data: &[u8]) -> Self {
+        Self {
+            minute:  data[0],
+            second:  data[1],
+            sector:  data[2],
+            mode:    data[3],
+            file:    data[4],
+            channel: data[5],
+            submode: CDSectorSubmode::from_bits_truncate(data[6]),
+            coding:  data[7],
+        }
     }
 }
 
@@ -785,7 +826,14 @@ impl CDROM {
     }
 
     fn get_loc_l(&mut self) -> DriveResult<()> {
-        unimplemented!("get loc l");
+        self.send_response(self.current_sector_header.minute, 3);
+        self.send_response(self.current_sector_header.second, 3);
+        self.send_response(self.current_sector_header.sector, 3);
+        self.send_response(self.current_sector_header.mode, 3);
+        self.send_response(self.current_sector_header.file, 3);
+        self.send_response(self.current_sector_header.channel, 3);
+        self.send_response(self.current_sector_header.submode.bits(), 3);
+        self.send_response(self.current_sector_header.coding, 3);
         self.command_complete()
     }
 
@@ -900,19 +948,5 @@ impl CDROM {
         // TODO: start audio streaming..?
         self.send_response(self.drive_status.bits(), 3);
         self.command_complete()
-    }
-}
-
-bitflags::bitflags! {
-    #[derive(Clone, Copy)]
-    struct CDSectorSubmode: u8 {
-        const EOF       = bit!(7);
-        const RealTime  = bit!(6);
-        const Form2     = bit!(5);
-        const Trigger   = bit!(4);
-        const Data      = bit!(3);
-        const Audio     = bit!(2);
-        const Video     = bit!(1);
-        const EOR       = bit!(0);
     }
 }

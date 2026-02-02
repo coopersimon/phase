@@ -12,8 +12,8 @@ Below is a list of selected games and their status.
 - Crash Bandicoot 3: Peripheral error (multitap?)
 - Crash Team Racing: Locks up after displaying (broken) title screen
 - Final Fantasy 7: Gets to main menu, displays broken video (24-bit color).
-- Final Fantasy Tactics: Flashes a bit (titles), then displays broken video. Then crashes at menu (get loc L on CD)
-- Gran Turismo: Crashes trying to use nonsense GPU command. If this is ignored, crashes after titles (get loc L)
+- Final Fantasy Tactics: Flashes a bit (titles), then displays broken video. It did segfault once here (???). Actually gets into gameplay OK, with some jank.
+- Gran Turismo: Crashes trying to use nonsense GPU command. If this is ignored, crashes copying frame buffer
 - Metal Gear Solid: Waiting for SPU interrupt.
 - Resident Evil: Write VRAM block out of bounds (might require wrapping)
 - Resident Evil 2: Displays a title screen then a broken video (appears unskippable)
