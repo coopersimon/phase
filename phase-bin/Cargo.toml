@@ -15,3 +15,8 @@ features = ["derive"]
 
 [dependencies.phase]
 path = "../phase"
+
+[profile.normal]
+inherits = "release"
+#incremental = true
+debug = true

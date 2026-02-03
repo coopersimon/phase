@@ -118,19 +118,16 @@ impl MemBus {
             let ram_addr = transfer.addr & 0x1F_FFFF;
             let cycles = if transfer.from_ram {
                 let data = self.main_ram.read_word(ram_addr);
-                let load_cycles = 1; // TODO...
                 if transfer.list_data {
                     self.dma.write_list_data(transfer.device, data);
-                    load_cycles
+                    1
                 } else {
-                    let store_cycles = self.mut_dma_device(transfer.device).dma_write_word(data);
-                    store_cycles + load_cycles
+                    self.mut_dma_device(transfer.device).dma_write_word(data)
                 }
             } else {
-                let Data { data, cycles: load_cycles } = self.mut_dma_device(transfer.device).dma_read_word();
+                let Data { data, cycles } = self.mut_dma_device(transfer.device).dma_read_word();
                 self.main_ram.write_word(ram_addr, data);
-                let store_cycles = 1; // TODO...
-                store_cycles + load_cycles
+                cycles
             };
             if self.do_clock(cycles) {
                 self.begin_frame();
@@ -189,102 +186,99 @@ impl Mem32 for MemBus {
     }
 
     fn read_byte(&mut self, addr: Self::Addr) -> Data<u8> {
-        let data = match addr {
-            0x0000_0000..=0x007F_FFFF => self.main_ram.read_byte(addr & 0x1F_FFFF),
-            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.read_byte(addr),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.read_byte(addr & 0x3FF),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.read_byte(addr)).unwrap_or_default(),
-            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.read_byte(addr),
-            0x1FC0_0000..=0x1FC7_FFFF => self.bios.read_byte(addr & 0x7_FFFF),
+        let (data, cycles) = match addr {
+            0x0000_0000..=0x007F_FFFF => (self.main_ram.read_byte(addr & 0x1F_FFFF), 3),
+            0x1F00_0000..=0x1F7F_FFFF => (self.expansion_port_1.read_byte(addr), 1),
+            0x1F80_0000..=0x1F80_03FF => (self.scratchpad.read_byte(addr & 0x3FF), 1),
+            0x1F80_1000..=0x1F80_1FFF => (self.mut_io_device(addr).read_byte(addr), 1),
+            0x1F80_2000..=0x1F80_2FFF => (self.expansion_port_2.read_byte(addr), 1),
+            0x1FC0_0000..=0x1FC7_FFFF => (self.bios.read_byte(addr & 0x7_FFFF), 1),
             _ => panic!("read invalid address {:X}", addr),
         };
-        Data { data, cycles: 1 }
+        Data { data, cycles }
     }
 
     fn write_byte(&mut self, addr: Self::Addr, data: u8) -> usize {
         match addr {
-            0x0000_0000..=0x007F_FFFF => self.main_ram.write_byte(addr & 0x1F_FFFF, data),
-            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.write_byte(addr, data),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.write_byte(addr & 0x3FF, data),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.write_byte(addr, data)).unwrap_or_default(),
-            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.write_byte(addr, data),
-            0x1FC0_0000..=0x1FC7_FFFF => {}, // BIOS
+            0x0000_0000..=0x007F_FFFF => {self.main_ram.write_byte(addr & 0x1F_FFFF, data); 3},
+            0x1F00_0000..=0x1F7F_FFFF => {self.expansion_port_1.write_byte(addr, data); 1},
+            0x1F80_0000..=0x1F80_03FF => {self.scratchpad.write_byte(addr & 0x3FF, data); 1},
+            0x1F80_1000..=0x1F80_1FFF => {self.mut_io_device(addr).write_byte(addr, data); 1},
+            0x1F80_2000..=0x1F80_2FFF => {self.expansion_port_2.write_byte(addr, data); 1},
+            0x1FC0_0000..=0x1FC7_FFFF => 1, // BIOS
             _ => panic!("write invalid address {:X}", addr),
         }
-        1
     }
 
     fn read_halfword(&mut self, addr: Self::Addr) -> Data<u16> {
-        let data = match addr {
-            0x0000_0000..=0x007F_FFFF => self.main_ram.read_halfword(addr & 0x1F_FFFF),
-            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.read_halfword(addr),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.read_halfword(addr & 0x3FF),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.read_halfword(addr)).unwrap_or_default(),
-            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.read_halfword(addr),
-            0x1FC0_0000..=0x1FC7_FFFF => self.bios.read_halfword(addr & 0x7_FFFF),
+        let (data, cycles) = match addr {
+            0x0000_0000..=0x007F_FFFF => (self.main_ram.read_halfword(addr & 0x1F_FFFF), 3),
+            0x1F00_0000..=0x1F7F_FFFF => (self.expansion_port_1.read_halfword(addr), 1),
+            0x1F80_0000..=0x1F80_03FF => (self.scratchpad.read_halfword(addr & 0x3FF), 1),
+            0x1F80_1000..=0x1F80_1FFF => (self.mut_io_device(addr).read_halfword(addr), 1),
+            0x1F80_2000..=0x1F80_2FFF => (self.expansion_port_2.read_halfword(addr), 1),
+            0x1FC0_0000..=0x1FC7_FFFF => (self.bios.read_halfword(addr & 0x7_FFFF), 1),
             _ => panic!("read invalid address {:X}", addr),
         };
-        Data { data, cycles: 1 }
+        Data { data, cycles }
     }
 
     fn write_halfword(&mut self, addr: Self::Addr, data: u16) -> usize {
         match addr {
-            0x0000_0000..=0x007F_FFFF => self.main_ram.write_halfword(addr & 0x1F_FFFF, data),
-            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.write_halfword(addr, data),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.write_halfword(addr & 0x3FF, data),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.write_halfword(addr, data)).unwrap_or_default(),
-            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.write_halfword(addr, data),
-            0x1FC0_0000..=0x1FC7_FFFF => {}, // BIOS
+            0x0000_0000..=0x007F_FFFF => {self.main_ram.write_halfword(addr & 0x1F_FFFF, data); 3},
+            0x1F00_0000..=0x1F7F_FFFF => {self.expansion_port_1.write_halfword(addr, data); 1},
+            0x1F80_0000..=0x1F80_03FF => {self.scratchpad.write_halfword(addr & 0x3FF, data); 1},
+            0x1F80_1000..=0x1F80_1FFF => {self.mut_io_device(addr).write_halfword(addr, data); 1},
+            0x1F80_2000..=0x1F80_2FFF => {self.expansion_port_2.write_halfword(addr, data); 1},
+            0x1FC0_0000..=0x1FC7_FFFF => 1, // BIOS
             _ => panic!("write invalid address {:X}", addr),
         }
-        1
     }
 
     fn read_word(&mut self, addr: Self::Addr) -> Data<u32> {
-        let data = match addr {
-            0x0000_0000..=0x007F_FFFF => self.main_ram.read_word(addr & 0x1F_FFFF),
-            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.read_word(addr),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.read_word(addr & 0x3FF),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.read_word(addr)).unwrap_or_default(),
-            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.read_word(addr),
-            0x1FC0_0000..=0x1FC7_FFFF => self.bios.read_word(addr & 0x7_FFFF),
+        let (data, cycles) = match addr {
+            0x0000_0000..=0x007F_FFFF => (self.main_ram.read_word(addr & 0x1F_FFFF), 3),
+            0x1F00_0000..=0x1F7F_FFFF => (self.expansion_port_1.read_word(addr), 1),
+            0x1F80_0000..=0x1F80_03FF => (self.scratchpad.read_word(addr & 0x3FF), 1),
+            0x1F80_1000..=0x1F80_1FFF => (self.mut_io_device(addr).read_word(addr), 1),
+            0x1F80_2000..=0x1F80_2FFF => (self.expansion_port_2.read_word(addr), 1),
+            0x1FC0_0000..=0x1FC7_FFFF => (self.bios.read_word(addr & 0x7_FFFF), 1),
             _ => panic!("read invalid address {:X}", addr),
         };
-        Data { data, cycles: 1 }
+        Data { data, cycles }
     }
 
     fn write_word(&mut self, addr: Self::Addr, data: u32) -> usize {
         match addr {
-            0x0000_0000..=0x007F_FFFF => self.main_ram.write_word(addr & 0x1F_FFFF, data),
-            0x1F00_0000..=0x1F7F_FFFF => self.expansion_port_1.write_word(addr, data),
-            0x1F80_0000..=0x1F80_03FF => self.scratchpad.write_word(addr & 0x3FF, data),
-            0x1F80_1000..=0x1F80_1FFF => self.mut_io_device(addr).map(|d| d.write_word(addr, data)).unwrap_or_default(),
-            0x1F80_2000..=0x1F80_2FFF => self.expansion_port_2.write_word(addr, data),
-            0x1FC0_0000..=0x1FC7_FFFF => {}, // BIOS
+            0x0000_0000..=0x007F_FFFF => {self.main_ram.write_word(addr & 0x1F_FFFF, data); 3},
+            0x1F00_0000..=0x1F7F_FFFF => {self.expansion_port_1.write_word(addr, data); 1},
+            0x1F80_0000..=0x1F80_03FF => {self.scratchpad.write_word(addr & 0x3FF, data); 1},
+            0x1F80_1000..=0x1F80_1FFF => {self.mut_io_device(addr).write_word(addr, data); 1},
+            0x1F80_2000..=0x1F80_2FFF => {self.expansion_port_2.write_word(addr, data); 1},
+            0x1FC0_0000..=0x1FC7_FFFF => 1, // BIOS
             _ => panic!("write invalid address {:X}", addr),
         }
-        1
     }
 }
 
 impl MemBus {
     /// Mutably reference an I/O device.
-    fn mut_io_device<'a>(&'a mut self, addr: u32) -> Option<&'a mut dyn MemInterface> {
+    fn mut_io_device<'a>(&'a mut self, addr: u32) -> &'a mut dyn MemInterface {
         if addr != 0x1F801814 {
             //println!("access I/O {:X}", addr);
         }
         match addr {
-            0x1F80_1000..=0x1F80_1023 => Some(&mut self.control),
-            0x1F80_1040..=0x1F80_104F => Some(&mut self.peripheral),
+            0x1F80_1000..=0x1F80_1023 => &mut self.control,
+            0x1F80_1040..=0x1F80_104F => &mut self.peripheral,
             //0x1F80_1050..=0x1F80_105F => None, // Serial
-            0x1F80_1060..=0x1F80_1063 => Some(&mut self.control),
-            0x1F80_1070..=0x1F80_1077 => Some(&mut self.interrupts),
-            0x1F80_1080..=0x1F80_10FF => Some(&mut self.dma),
-            0x1F80_1100..=0x1F80_1129 => Some(&mut self.timers),
-            0x1F80_1800..=0x1F80_1807 => Some(&mut self.cdrom),
-            0x1F80_1810..=0x1F80_1817 => Some(&mut self.gpu),
-            0x1F80_1820..=0x1F80_1827 => Some(&mut self.mdec),
-            0x1F80_1C00..=0x1F80_1FFF => Some(&mut self.spu),
+            0x1F80_1060..=0x1F80_1063 => &mut self.control,
+            0x1F80_1070..=0x1F80_1077 => &mut self.interrupts,
+            0x1F80_1080..=0x1F80_10FF => &mut self.dma,
+            0x1F80_1100..=0x1F80_1129 => &mut self.timers,
+            0x1F80_1800..=0x1F80_1807 => &mut self.cdrom,
+            0x1F80_1810..=0x1F80_1817 => &mut self.gpu,
+            0x1F80_1820..=0x1F80_1827 => &mut self.mdec,
+            0x1F80_1C00..=0x1F80_1FFF => &mut self.spu,
             _ => panic!("no such I/O device at {:X}", addr),
         }
     }

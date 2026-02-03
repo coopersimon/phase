@@ -78,14 +78,12 @@ impl MDEC {
                 self.finish_command();
                 self.status.remove(Status::DataInFifoFull);
             }
-            // TODO: check bits instead?
-            if self.param_words_remaining > 0 {
-                MDECStatus::DataInReady
-            } else if !self.out_fifo.is_empty() {
-                MDECStatus::DataOutReady
-            } else {
-                MDECStatus::None
-            }
+        }
+        // TODO: check bits instead?
+        if self.param_words_remaining > 0 && self.param_words_remaining % 0x20 == 0 {
+            MDECStatus::DataInReady
+        } else if !self.out_fifo.is_empty() && self.out_fifo.len() % 0x20 == 0 && self.dma_reorder_fifo.len() % 0x20 == 0 {
+            MDECStatus::DataOutReady
         } else {
             MDECStatus::None
         }

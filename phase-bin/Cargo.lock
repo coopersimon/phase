@@ -1003,7 +1003,7 @@ dependencies = [
 [[package]]
 name = "mips"
 version = "0.1.0"
-source = "git+https://github.com/coopersimon/e-mips#e1dd026535fdb26754ce50b771a232c5822342cf"
+source = "git+https://github.com/coopersimon/e-mips#7aabb5d4a632b444d363e8d183c67de34cfa16c5"
 dependencies = [
  "num-traits",
 ]

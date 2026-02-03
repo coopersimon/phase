@@ -418,6 +418,8 @@ impl DMAChannel {
             }
         } else if self.current_block_count <= 1 {
             self.control.remove(ChannelControl::StartBusy);
+            self.base_addr = self.current_addr;
+            self.current_block_count = 0;
             true
         } else {
             self.base_addr = self.current_addr;
