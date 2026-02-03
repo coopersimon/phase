@@ -24,6 +24,8 @@ pub struct DMA {
     interrupt:          DMAInterrupt,
     irq_pending:        bool,
     table_generator:    OrderingTableGen,
+
+    current_active_channel: Option<usize>,
 }
 
 /// Represents a single word transfer via DMA.
@@ -48,6 +50,8 @@ impl DMA {
             interrupt:          DMAInterrupt::empty(),
             irq_pending:        false,
             table_generator:    OrderingTableGen::new(),
+
+            current_active_channel: None,
         }
     }
 
@@ -63,28 +67,28 @@ impl DMA {
     }
 
     pub fn mdec_recv_req(&mut self) {
-        self.channels[0].start_sync_mode(DMA_REQ_MODE);
+        self.begin_transfer(0, DMA_REQ_MODE);
     }
 
     pub fn mdec_send_req(&mut self) {
-        self.channels[1].start_sync_mode(DMA_REQ_MODE);
+        self.begin_transfer(1, DMA_REQ_MODE);
     }
 
     pub fn spu_req(&mut self) {
-        self.channels[4].start_sync_mode(DMA_REQ_MODE);
+        self.begin_transfer(4, DMA_REQ_MODE);
     }
 
     pub fn gpu_recv_req(&mut self) {
         // TODO: only one call here...
         if self.channels[2].control.contains(ChannelControl::TransferDir) {
-            self.channels[2].start_sync_mode(DMA_REQ_MODE);
-            self.channels[2].start_sync_mode(DMA_LIST_MODE);
+            self.begin_transfer(2, DMA_REQ_MODE);
+            self.begin_transfer(2, DMA_LIST_MODE);
         }
     }
 
     pub fn gpu_send_req(&mut self) {
         if !self.channels[2].control.contains(ChannelControl::TransferDir) {
-            self.channels[2].start_sync_mode(DMA_REQ_MODE);
+            self.begin_transfer(2, DMA_REQ_MODE);
         }
     }
 
@@ -96,19 +100,7 @@ impl DMA {
     /// 
     /// If None, then no transfers are necessary.
     pub fn get_transfer(&mut self) -> Option<DMATransfer> {
-        // Get active DMA channel.
-        let mut current = None;
-        let mut current_prio = 8;
-        for n in (0..7).rev() {
-            let channel = self.control.bits() >> (n * 4);
-            let active = channel & 0x8 == 0x8;
-            let prio = channel & 0x7;
-            if active && prio < current_prio && self.channels[n].control.contains(ChannelControl::StartBusy) {
-                current_prio = prio;
-                current = Some(n);
-            }
-        }
-        if let Some(chan_idx) = current {
+        if let Some(chan_idx) = self.current_active_channel {
             let channel = &mut self.channels[chan_idx];
             channel.control.remove(ChannelControl::StartTrigger);
             let transfer = Some(DMATransfer {
@@ -142,8 +134,28 @@ impl DMA {
         }
     }
 
+    /// When this is called, the DMA system will figure out which transfer is
+    /// active right now.
+    /// 
+    /// It should be called when anything is changed that might start or
+    /// stop a transfer.
+    fn evaluate_active_transfer(&mut self) {
+        self.current_active_channel = None;
+        let mut current_prio = 8;
+        for n in (0..7).rev() {
+            let channel = self.control.bits() >> (n * 4);
+            let active = test_bit!(channel, 3);
+            let prio = channel & 0x7;
+            if active && prio < current_prio && self.channels[n].control.contains(ChannelControl::StartBusy) {
+                current_prio = prio;
+                self.current_active_channel = Some(n);
+            }
+        }
+    }
+
     fn set_control(&mut self, data: u32) {
         self.control = DMAControl::from_bits_truncate(data);
+        self.evaluate_active_transfer();
     }
 
     fn set_interrupt(&mut self, data: u32) {
@@ -162,6 +174,11 @@ impl DMA {
         }
     }
 
+    fn begin_transfer(&mut self, channel: usize, sync_mode: u32) {
+        self.channels[channel].start_sync_mode(sync_mode);
+        self.evaluate_active_transfer();
+    }
+
     /// Set IRQ bit and trigger IRQ if necessary.
     fn transfer_complete(&mut self, channel: usize) {
         let mask_bit = 1 << (channel + 16);
@@ -176,6 +193,12 @@ impl DMA {
                 }
             }
         }
+        self.evaluate_active_transfer();
+    }
+
+    fn set_channel_control(&mut self, channel: usize, data: u32) {
+        self.channels[channel].set_control(data);
+        self.evaluate_active_transfer();
     }
 }
 
@@ -224,32 +247,32 @@ impl MemInterface for DMA {
         match addr {
             0x1F801080 => self.channels[0].set_addr(data),
             0x1F801084 => self.channels[0].block_control = data,
-            0x1F801088 => self.channels[0].set_control(data),
+            0x1F801088 => self.set_channel_control(0, data),
             
             0x1F801090 => self.channels[1].set_addr(data),
             0x1F801094 => self.channels[1].block_control = data,
-            0x1F801098 => self.channels[1].set_control(data),
+            0x1F801098 => self.set_channel_control(1, data),
             
             0x1F8010A0 => self.channels[2].set_addr(data),
             0x1F8010A4 => self.channels[2].block_control = data,
-            0x1F8010A8 => self.channels[2].set_control(data),
+            0x1F8010A8 => self.set_channel_control(2, data),
             
             0x1F8010B0 => self.channels[3].set_addr(data),
             0x1F8010B4 => self.channels[3].block_control = data,
-            0x1F8010B8 => self.channels[3].set_control(data),
+            0x1F8010B8 => self.set_channel_control(3, data),
             
             0x1F8010C0 => self.channels[4].set_addr(data),
             0x1F8010C4 => self.channels[4].block_control = data,
-            0x1F8010C8 => self.channels[4].set_control(data),
+            0x1F8010C8 => self.set_channel_control(4, data),
             
             0x1F8010D0 => self.channels[5].set_addr(data),
             0x1F8010D4 => self.channels[5].block_control = data,
-            0x1F8010D8 => self.channels[5].set_control(data),
+            0x1F8010D8 => self.set_channel_control(5, data),
             
             0x1F8010E0 => self.channels[6].set_addr(data),
             0x1F8010E4 => self.channels[6].block_control = data,
             0x1F8010E8 => {
-                self.channels[6].set_control(data);
+                self.set_channel_control(6, data);
                 if self.channels[6].control.contains(ChannelControl::StartTrigger) {
                     self.table_generator.init(self.channels[6].base_addr, self.channels[6].current_word_count);
                 }
