@@ -75,16 +75,16 @@ impl GPUClockRes {
 /// Tracks cycle count and current state of the LCD drawing process.
 pub struct StateMachine {
     state:          VideoState,
-    h_cycle_count:  usize,
-    h_dot:          usize,
+    h_cycle_count:  f64,
+    h_dot:          f64,
     v_count:        usize,
 
     // Timing constants:
     v_res:          usize,
     h_res:          usize,
-    cycles_per_dot: usize,
-    h_draw_cycles:  usize,
-    h_total_cycles: usize,
+    dots_per_cycle: f64,
+    h_draw_cycles:  f64,
+    h_total_cycles: f64,
 
     interlace:      InterlaceState,
 }
@@ -93,15 +93,15 @@ impl StateMachine {
     pub fn new() -> Self {
         let mut machine = Self {
             state:          VideoState::Drawing,
-            h_cycle_count:  0,
-            h_dot:          0,
+            h_cycle_count:  0.0,
+            h_dot:          0.0,
             v_count:        0,
 
             v_res:          0,
             h_res:          0,
-            cycles_per_dot: 0,
-            h_draw_cycles:  0,
-            h_total_cycles: 0,
+            dots_per_cycle: 0.0,
+            h_draw_cycles:  0.0,
+            h_total_cycles: 0.0,
 
             interlace:      InterlaceState::Off,
         };
@@ -112,17 +112,18 @@ impl StateMachine {
     /// Set new horizontal resolution using NTSC timings.
     pub fn set_h_res_ntsc(&mut self, h_res: usize) {
         self.v_res = ntsc::SCANLINES;
-        self.h_total_cycles = ntsc::H_CYCLES;
+        self.h_total_cycles = ntsc::H_CYCLES as f64;
         self.h_res = h_res;
-        self.cycles_per_dot = match h_res {
+        let cycles_per_dot = match h_res {
             256 => ntsc::DOT_COUNT_256,
             320 => ntsc::DOT_COUNT_320,
             368 => ntsc::DOT_COUNT_368,
             512 => ntsc::DOT_COUNT_512,
             640 => ntsc::DOT_COUNT_640,
             _ => panic!("invalid horizontal resolution specified!"),
-        };
-        self.h_draw_cycles = self.cycles_per_dot * self.h_res;
+        } as f64;
+        self.dots_per_cycle = 1.0 / cycles_per_dot;
+        self.h_draw_cycles = cycles_per_dot * (self.h_res as f64);
     }
 
     /// Set or unset interlace mode.
@@ -139,9 +140,10 @@ impl StateMachine {
     /// Advance the state machine.
     pub fn clock(&mut self, cycles: usize) -> GPUClockRes {
         use VideoState::*;
-        self.h_cycle_count += cycles;
-        let new_dot_count = self.h_cycle_count / self.cycles_per_dot;
-        let dots = new_dot_count - self.h_dot;
+        let gpu_cycles = (cycles as f64) * (11.0 / 7.0);
+        self.h_cycle_count += gpu_cycles;
+        let new_dot_count = self.h_cycle_count * self.dots_per_cycle;
+        let dots = (new_dot_count - self.h_dot).floor() as usize;
         self.h_dot = new_dot_count;
 
         match self.state {
@@ -165,7 +167,7 @@ impl StateMachine {
                 if self.h_cycle_count >= self.h_total_cycles {
                     self.h_cycle_count -= self.h_total_cycles;
                     self.v_count += 1;
-                    self.h_dot = self.h_cycle_count / self.cycles_per_dot;
+                    self.h_dot = self.h_cycle_count * self.dots_per_cycle;
                     if self.v_count < DRAWLINES {
                         self.state = Drawing;
                         GPUClockRes::dots(dots)
@@ -181,7 +183,7 @@ impl StateMachine {
                 if self.h_cycle_count >= self.h_total_cycles {
                     self.h_cycle_count -= self.h_total_cycles;
                     self.v_count += 1;
-                    self.h_dot = self.h_cycle_count / self.cycles_per_dot;
+                    self.h_dot = self.h_cycle_count * self.dots_per_cycle;
                     if self.v_count < self.v_res {
                         self.state = VBlank;
                         GPUClockRes::v_blank(dots)

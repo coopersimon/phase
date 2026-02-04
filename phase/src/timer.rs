@@ -258,6 +258,7 @@ impl Timer {
     fn clock(&mut self, cycles: usize) -> bool {
         if self.pulse_latch {
             self.mode.insert(TimerMode::IRQ);
+            self.pulse_latch = false;
         }
         if self.pause {
             return false;
