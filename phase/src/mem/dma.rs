@@ -173,6 +173,20 @@ impl DMA {
         }
     }
 
+    fn set_interrupt_enable_bits(&mut self, data: u8) {
+        let irq = self.interrupt.contains(DMAInterrupt::InterruptReq);
+        let mask = DMAInterrupt::from_bits_truncate(0x00FF_0000);
+        self.interrupt.remove(mask);
+        let to_set = DMAInterrupt::from_bits_truncate((data as u32) << 16);
+        self.interrupt.insert(to_set);
+        if self.interrupt.contains(DMAInterrupt::EnableIRQ) && self.interrupt.intersects(DMAInterrupt::IRQFlags) {
+            self.interrupt.insert(DMAInterrupt::InterruptReq);
+            if !irq { // Mark pending IRQ if request bit changes 0 => 1.
+                self.irq_pending = true;
+            }
+        }
+    }
+
     fn begin_transfer(&mut self, channel: usize, sync_mode: u32) {
         if self.channels[channel].start_sync_mode(sync_mode) {
             self.evaluate_active_transfer();
@@ -282,6 +296,14 @@ impl MemInterface for DMA {
             0x1F8010F4 => self.set_interrupt(data),
 
             _ => panic!("invalid DMA address {:X}", addr),
+        }
+    }
+
+    fn write_byte(&mut self, addr: u32, data: u8) {
+        match addr {
+            // Important we handle this separately so we don't acknowledge IRQ bits too early.
+            0x1F8010F6 => self.set_interrupt_enable_bits(data),
+            _ => panic!("trying to write byte to DMA address {:X}", addr),
         }
     }
 }

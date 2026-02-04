@@ -90,6 +90,8 @@ impl MDEC {
                     },
                     _ => {},
                 }
+                self.status.remove(Status::DataInFifoFull);
+                self.status.insert(Status::DataInReq);
             }
         }
         MDECStatus {
@@ -106,12 +108,12 @@ impl MemInterface for MDEC {
             0x1F80_1824 => self.read_status(),
             _ => panic!("invalid MDEC read address"),
         };
-        println!("read mdec {:X} from {:X}", data, addr);
+        //println!("read mdec {:X} from {:X}", data, addr);
         data
     }
 
     fn write_word(&mut self, addr: u32, data: u32) {
-        println!("write mdec {:X} to {:X}", data, addr);
+        //println!("write mdec {:X} to {:X}", data, addr);
         match addr {
             0x1F80_1820 => self.write_command(data),
             0x1F80_1824 => self.write_control(data),
@@ -144,6 +146,7 @@ impl DMADevice for MDEC {
         };
         if self.dma_reorder_fifo.is_empty() && self.out_fifo.is_empty() {
             self.status.remove(Status::DataOutReq);
+            self.status.insert(Status::DataOutFifoEmpty);
         }
         Data { data, cycles: 1 }
     }
@@ -197,7 +200,7 @@ enum OutputDepth {
     RGB24
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Block {
     None,
     Cr,
@@ -355,6 +358,7 @@ impl MDEC {
                     Block::Cr => {
                         self.cr_block.fill(0);
                         if !decode_block(&mut self.in_fifo, &self.color_quant_table, &self.scale_table, &mut self.cr_block) {
+                            // End padding.
                             return;
                         }
                         self.current_block = Block::Cb;
@@ -402,6 +406,7 @@ impl MDEC {
                     Block::Cr => {
                         self.cr_block.fill(0);
                         if !decode_block(&mut self.in_fifo, &self.color_quant_table, &self.scale_table, &mut self.cr_block) {
+                            // End padding.
                             return;
                         }
                         self.current_block = Block::Cb;

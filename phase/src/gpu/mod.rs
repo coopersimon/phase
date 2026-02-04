@@ -72,22 +72,12 @@ impl GPU {
         res
     }
 
-    /// Check if the GPU is ready to receive data via DMA.
-    /*pub fn dma_recv_ready(&self) -> bool {
-        let mask = (GPUStatus::DMAMode | GPUStatus::DMARecvReady).bits();
-        (self.status.load(Ordering::Acquire) & mask) == GPUStatus::TransferReady.bits()
-    }
-
-    /// Check if the GPU is ready to send data to CPU via DMA.
-    pub fn dma_send_ready(&self) -> bool {
-        // TODO: more required here..?
-        !self.vram_rx.is_empty()
-    }*/
-
     /// Check if DMA is ready.
     pub fn dma_ready(&self) -> bool {
-        let status = self.status.load(Ordering::Acquire);
-        (status & GPUStatus::DMARequest.bits()) != 0
+        // TODO: SORT THIS OUT!!
+        /*let status = self.status.load(Ordering::Acquire);
+        (status & GPUStatus::DMARequest.bits()) != 0*/
+        true
     }
 
     /// This extracts a frame from the renderer. It needs to communicate across a thread.
