@@ -69,6 +69,7 @@ pub struct CDROM {
     command: u8,
     response_count: u8,
     data_fifo_size: u64,
+    irq_latch: bool,
 }
 
 impl CDROM {
@@ -107,6 +108,7 @@ impl CDROM {
             command: 0,
             response_count: 0,
             data_fifo_size: 0,
+            irq_latch: false,
         }
     }
 
@@ -238,7 +240,7 @@ impl DMADevice for CDROM {
             self.read_data(),
             self.read_data()
         ]);
-        Data { data, cycles: 23 }
+        Data { data, cycles: 8 }
     }
 
     fn dma_write_word(&mut self, _data: u32) -> usize {
@@ -262,11 +264,13 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     #[derive(Clone, Copy)]
     struct IntFlags: u8 {
-        const Unused        = bits![5, 6, 7];
         const ResetParamFIFO= bit!(6);
         const CommandStart  = bit!(4);
         const Unknown       = bit!(3);
         const Response      = bits![0, 1, 2];
+
+        const Unused        = bits![5, 6, 7];
+        const IntBits       = bits![0, 1, 2, 3, 4];
     }
 }
 
@@ -292,7 +296,7 @@ bitflags::bitflags! {
 // Internal.
 impl CDROM {
     fn check_irq(&mut self) -> bool {
-        (self.int_enable & self.int_flags).intersects(!IntFlags::Unused)
+        std::mem::take(&mut self.irq_latch)
     }
 
     fn write_status(&mut self, data: u8) {
@@ -341,6 +345,9 @@ impl CDROM {
     fn set_int_enable(&mut self, data: u8) {
         self.int_enable = IntFlags::from_bits_truncate(data);
         self.int_enable.insert(IntFlags::Unused);
+        if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
+            self.irq_latch = true;
+        }
     }
 
     fn set_int_flags(&mut self, data: u8) {
@@ -352,6 +359,7 @@ impl CDROM {
         }
         self.int_flags.remove(data_in);
         self.int_flags.insert(IntFlags::Unused);
+        self.irq_latch = false;
     }
     
     fn read_response(&mut self) -> u8 {
@@ -370,6 +378,9 @@ impl CDROM {
         self.status.insert(Status::ResFifoNotEmpty);
         self.int_flags.remove(IntFlags::Response);
         self.int_flags.insert(IntFlags::from_bits_truncate(int));
+        if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
+            self.irq_latch = true;
+        }
     }
 
     /// Indicate first response has been sent.
@@ -406,7 +417,7 @@ impl CDROM {
         println!("CD read @ {:X}", self.seek_file_offset);
         self.read_from_file();
         let start_pos = self.seek_file_offset - self.buffer_file_offset;
-        self.current_sector_header = SectorHeader::from_slice(&self.buffer[(SECTOR_SYNC_BYTES as usize)..]);
+        self.current_sector_header = SectorHeader::from_slice(&self.buffer[(start_pos + SECTOR_SYNC_BYTES) as usize..]);
         let trigger_int_1 = if self.send_xa_adpcm_sector() {
             // TODO: actually process this...
             false
@@ -414,7 +425,7 @@ impl CDROM {
             // Send as data.
             if self.mode.contains(DriveMode::SectorSize) {
                 self.sector_offset = start_pos + SECTOR_SYNC_BYTES;
-                self.data_fifo_size = SECTOR_DATA + SECTOR_SYNC_BYTES;
+                self.data_fifo_size = SECTOR_SIZE - SECTOR_SYNC_BYTES;//SECTOR_DATA + SECTOR_SYNC_BYTES;
             } else {
                 self.sector_offset = start_pos + SECTOR_HEADER;
                 self.data_fifo_size = SECTOR_DATA;
@@ -423,7 +434,7 @@ impl CDROM {
             true
         };
         // Begin count down for the next read.
-        self.read_data_counter = if self.mode.contains(DriveMode::SectorSize) {READ_CYCLES / 2} else {READ_CYCLES};
+        self.read_data_counter = if self.mode.contains(DriveMode::Speed) {READ_CYCLES / 2} else {READ_CYCLES};
         self.seek_file_offset += SECTOR_SIZE;
         trigger_int_1
     }
@@ -434,7 +445,7 @@ impl CDROM {
     /// will return false.
     fn send_xa_adpcm_sector(&mut self) -> bool {
         if self.mode.contains(DriveMode::XAADPCM) {
-            //println!("try XA-ADPCM: {:X} {:X} {:X} {:X}", file_number, channel_number, submode, coding_info);
+            //println!("try XA-ADPCM: {:X} {:X} {:X} {:X}", self.current_sector_header.file, self.current_sector_header.channel, self.current_sector_header.submode.bits(), self.current_sector_header.coding);
             if self.mode.contains(DriveMode::XAFilter) {
                 if self.current_sector_header.file != self.file_filter ||
                     self.current_sector_header.channel != self.channel_filter {
@@ -644,6 +655,11 @@ impl CDROM {
     }
 
     fn set_mode(&mut self) -> DriveResult<()> {
+        // There are a few cases of games modifying the mode
+        // mid-read, before firing off the new read. This can
+        // lead to issues when the "old" read arrives and tries
+        // to be read with the "new" mode.
+        self.read_data_counter = 0;
         let mode = self.read_parameter()?;
         println!("Set mode: {:X}", mode);
         self.mode = DriveMode::from_bits_truncate(mode);
@@ -784,7 +800,7 @@ impl CDROM {
         }
         self.drive_status.remove(DriveStatus::ReadBits);
         self.drive_status.insert(DriveStatus::Reading);
-        self.read_data_counter = if self.mode.contains(DriveMode::SectorSize) {READ_CYCLES / 2} else {READ_CYCLES};
+        self.read_data_counter = if self.mode.contains(DriveMode::Speed) {READ_CYCLES / 2} else {READ_CYCLES};
         self.send_response(self.drive_status.bits(), 3);
         self.command_complete()
     }
