@@ -69,17 +69,11 @@ impl GPU {
 
     pub fn clock(&mut self, cycles: usize) -> GPUClockRes {
         let res = self.state.clock(cycles);
-
-        /*while let Some(data) = self.gp0_fifo.pop_front() {
-            self.exec_gp0_command(data);
-        }
-        self.status.insert(GPUStatus::CommandReady | GPUStatus::DMARecvReady);*/
-
         res
     }
 
     /// Check if the GPU is ready to receive data via DMA.
-    pub fn dma_recv_ready(&self) -> bool {
+    /*pub fn dma_recv_ready(&self) -> bool {
         let mask = (GPUStatus::DMAMode | GPUStatus::DMARecvReady).bits();
         (self.status.load(Ordering::Acquire) & mask) == GPUStatus::TransferReady.bits()
     }
@@ -88,6 +82,12 @@ impl GPU {
     pub fn dma_send_ready(&self) -> bool {
         // TODO: more required here..?
         !self.vram_rx.is_empty()
+    }*/
+
+    /// Check if DMA is ready.
+    pub fn dma_ready(&self) -> bool {
+        let status = self.status.load(Ordering::Acquire);
+        (status & GPUStatus::DMARequest.bits()) != 0
     }
 
     /// This extracts a frame from the renderer. It needs to communicate across a thread.
@@ -130,6 +130,11 @@ impl DMADevice for GPU {
             0
         };*/
         let data = self.vram_rx.recv().unwrap_or_default();
+        if self.vram_rx.is_empty() {
+            let mut status = GPUStatus::from_bits_truncate(self.status.load(Ordering::Acquire));
+            status.clear_vram_send();
+            self.status.store(status.bits(), Ordering::Release);
+        }
         //println!("got {:X}", data);
         Data { data: data, cycles: 1 }
     }
@@ -194,9 +199,6 @@ impl GPU {
             if self.state.get_interlace_bit() {
                 status |= GPUStatus::InterlaceOdd.bits();
             }
-        }
-        if !self.vram_rx.is_empty() {
-            status |= GPUStatus::VRAMSendReady.bits();
         }
         status
     }

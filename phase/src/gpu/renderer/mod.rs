@@ -125,25 +125,31 @@ impl Renderer {
         // TODO: handle this more gracefully.
         panic!("command receiver failed");
     }
+
+    /// Write back atomic status.
+    #[inline(always)]
+    fn update_status(&mut self) {
+        self.atomic_status.store(self.status.bits(), Ordering::Release);
+    }
 }
 
 // GP1.
 impl Renderer {
     fn acknowledge_irq(&mut self) {
         self.status.remove(GPUStatus::IRQ);
-        self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.update_status();
     }
 
     fn display_enable(&mut self, enable: bool) {
         self.status.set(GPUStatus::DisplayEnable, enable);
-        self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.update_status();
         self.renderer.enable_display(enable);
     }
 
     fn data_request(&mut self, data_req_stat: GPUStatus) {
         self.status.remove(GPUStatus::DMAMode);
         self.status.insert(data_req_stat);
-        self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.update_status();
     }
 
     fn display_vram_offset(&mut self, offset: u32) {
@@ -169,7 +175,7 @@ impl Renderer {
     fn display_mode(&mut self, disp_mode_stat: GPUStatus) {
         self.status.remove(GPUStatus::DispModeFlags);
         self.status.insert(disp_mode_stat);
-        self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.update_status();
         let h_res = self.status.h_res();
         let v_res = self.status.v_res();
         self.frame.lock().unwrap().resize((h_res, v_res));
@@ -179,7 +185,7 @@ impl Renderer {
 
     fn tex_disable(&mut self, disable: bool) {
         self.status.set(GPUStatus::TexDisable, disable);
-        self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.update_status();
     }
 }
 
@@ -190,7 +196,7 @@ impl Renderer {
     fn exec_gp0_command(&mut self, data: u32) {
         //println!("GP0 command: {:X}", data);
         self.status.remove(GPUStatus::CommandReady);
-        self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.update_status();
         let command = (data >> 24) as u8;
         match command {
             0x00 => {}, // NOP
@@ -268,7 +274,7 @@ impl Renderer {
             _ => panic!("Invalid GP0 command: {:X}", data),
         }
         self.status.insert(GPUStatus::CommandReady);
-        self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.update_status();
     }
 
     fn clear_cache(&mut self) {
@@ -545,11 +551,15 @@ impl Renderer {
         let size = Size::from_xy(self.get_parameter());
         let data_words = size.word_count();
         self.staging_buffer.clear();
+        self.status.set_dma_recv();
+        self.update_status();
         for _ in 0..data_words {
             let data = self.get_parameter();
             self.staging_buffer.push((data & 0xFFFF) as u16);
             self.staging_buffer.push(((data >> 16) & 0xFFFF) as u16);
         }
+        self.status.clear_dma_recv();
+        self.update_status();
         self.renderer.write_vram_block(&self.staging_buffer, dest, size);
     }
 
@@ -559,6 +569,8 @@ impl Renderer {
         let data_words = size.word_count() as usize;
         self.staging_buffer.resize(data_words * 2, 0);
         self.renderer.read_vram_block(&mut self.staging_buffer, source, size);
+        self.status.set_vram_send();
+        self.update_status();
         // Send.
         for i in 0..data_words {
             let idx = i * 2;
@@ -573,7 +585,7 @@ impl Renderer {
 
     fn irq(&mut self) {
         self.status.insert(GPUStatus::IRQ);
-        self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.update_status();
     }
 
     fn draw_mode_setting(&mut self, param: u32) {
@@ -581,7 +593,7 @@ impl Renderer {
         self.status.remove(GPUStatus::DrawModeFlags);
         self.status.insert(GPUStatus::from_bits_truncate(low_bits));
         self.status.set(GPUStatus::TexDisable, test_bit!(param, 11));
-        self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.update_status();
 
         // TODO: x-flip and y-flip
 
@@ -621,7 +633,7 @@ impl Renderer {
         let check_mask_bit = test_bit!(param, 1);
         self.status.set(GPUStatus::SetDrawMask, set_mask_bit);
         self.status.set(GPUStatus::MaskDrawing, check_mask_bit);
-        self.atomic_status.store(self.status.bits(), Ordering::Release);
+        self.update_status();
         self.renderer.set_mask_settings(set_mask_bit, check_mask_bit);
     }
 }
@@ -657,7 +669,7 @@ bitflags::bitflags! {
         const DispModeFlags = bits![14, 16, 17, 18, 19, 20, 21, 22];
         const DrawModeFlags = bits![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15];
 
-        const TransferReady = bits![28, 30];
+        //const TransferReady = bits![28, 30];
         //const CommandTransferReady = bits![26, 30]; //?
     }
 }
@@ -680,6 +692,24 @@ impl GPUStatus {
         } else {
             240
         }
+    }
+
+    pub fn set_dma_recv(&mut self) {
+        // Assuming that whenever this is set, we are in DMAMode == 0b10
+        self.insert(GPUStatus::DMARequest);
+    }
+
+    pub fn clear_dma_recv(&mut self) {
+        self.remove(GPUStatus::DMARequest);
+    }
+
+    pub fn set_vram_send(&mut self) {
+        // Assuming that whenever this is set, we are in DMAMode == 0b11
+        self.insert(GPUStatus::VRAMSendReady | GPUStatus::DMARequest);
+    }
+
+    pub fn clear_vram_send(&mut self) {
+        self.remove(GPUStatus::VRAMSendReady | GPUStatus::DMARequest);
     }
 }
 

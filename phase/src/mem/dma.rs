@@ -78,18 +78,12 @@ impl DMA {
         self.begin_transfer(4, DMA_REQ_MODE);
     }
 
-    pub fn gpu_recv_req(&mut self) {
-        // TODO: only one call here...
-        if self.channels[2].control.contains(ChannelControl::TransferDir) {
-            self.begin_transfer(2, DMA_REQ_MODE);
-            self.begin_transfer(2, DMA_LIST_MODE);
-        }
+    pub fn gpu_req(&mut self) {
+        self.begin_transfer(2, DMA_REQ_MODE);
     }
 
-    pub fn gpu_send_req(&mut self) {
-        if !self.channels[2].control.contains(ChannelControl::TransferDir) {
-            self.begin_transfer(2, DMA_REQ_MODE);
-        }
+    pub fn gpu_list_req(&mut self) {
+        self.begin_transfer(2, DMA_LIST_MODE);
     }
 
     pub fn mut_table_gen<'a>(&'a mut self) -> &'a mut OrderingTableGen {
@@ -117,6 +111,8 @@ impl DMA {
             if channel.dec_word_count() {
                 if channel.finish_block() {
                     self.transfer_complete(chan_idx);
+                } else {
+                    self.evaluate_active_transfer();
                 }
             }
             transfer
@@ -130,6 +126,8 @@ impl DMA {
         if channel.set_list_data(data) {
             if channel.finish_block() {
                 self.transfer_complete(channel_idx);
+            } else {
+                self.evaluate_active_transfer();
             }
         }
     }
@@ -146,11 +144,12 @@ impl DMA {
             let channel = self.control.bits() >> (n * 4);
             let active = test_bit!(channel, 3);
             let prio = channel & 0x7;
-            if active && prio < current_prio && self.channels[n].control.contains(ChannelControl::StartBusy) {
+            if active && prio < current_prio && self.channels[n].active {
                 current_prio = prio;
                 self.current_active_channel = Some(n);
             }
         }
+        //println!("active transfer : {:?}", self.current_active_channel);
     }
 
     fn set_control(&mut self, data: u32) {
@@ -175,8 +174,9 @@ impl DMA {
     }
 
     fn begin_transfer(&mut self, channel: usize, sync_mode: u32) {
-        self.channels[channel].start_sync_mode(sync_mode);
-        self.evaluate_active_transfer();
+        if self.channels[channel].start_sync_mode(sync_mode) {
+            self.evaluate_active_transfer();
+        }
     }
 
     /// Set IRQ bit and trigger IRQ if necessary.
@@ -387,7 +387,12 @@ impl DMAChannel {
         }
     }
 
-    fn start_sync_mode(&mut self, mode: u32) {
+    /// Starts if the mode specified is set.
+    /// 
+    /// This needs to be called for each request in request mode,
+    /// and each command in list mode.
+    /// Returns `true` if the channel is now active.
+    fn start_sync_mode(&mut self, mode: u32) -> bool {
         let current_mode = self.get_mode();
         if mode == current_mode {
             if current_mode == DMA_IMM_MODE {
@@ -400,6 +405,7 @@ impl DMAChannel {
                 self.active = true;
             }
         }
+        self.active
     }
 
     /// Set list data for the channel, for a node.
@@ -419,9 +425,6 @@ impl DMAChannel {
         if mode == DMA_LIST_MODE && self.next_list_addr.is_none() {
             return false;
         }
-        if mode == DMA_LIST_MODE || mode == DMA_REQ_MODE {
-            self.active = false;
-        }
         self.current_word_count = self.current_word_count.wrapping_sub(1);
         self.current_word_count == 0
     }
@@ -429,6 +432,7 @@ impl DMAChannel {
     /// Finish a transfer block.
     /// Returns true if the entire transfer is complete.
     fn finish_block(&mut self) -> bool {
+        self.active = false;
         if self.get_mode() == DMA_LIST_MODE {
             // TODO: this should probably not panic.
             self.base_addr = self.next_list_addr.take().expect("no next address for list data!") & 0xFF_FFFF;

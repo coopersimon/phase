@@ -20,7 +20,7 @@ use crate::timer::Timers;
 use crate::cdrom::CDROM;
 use crate::expansion::{ExpansionPort1, ExpansionPort2};
 use crate::peripheral::PeripheralPort;
-use crate::mdec::{MDEC, MDECStatus};
+use crate::mdec::MDEC;
 
 pub struct MemBus {
     control: MemControl,
@@ -74,18 +74,18 @@ impl MemBus {
     /// and therefore we are syncing with the real world.
     fn do_clock(&mut self, cycles: usize) -> bool {
         let gpu_stat = self.gpu.clock(cycles);
-        if self.gpu.dma_recv_ready() {
-            self.dma.gpu_recv_req();
+        if self.gpu.dma_ready() {
+            self.dma.gpu_req();
         }
-        if self.gpu.dma_send_ready() {
-            self.dma.gpu_send_req();
-        }
+        // TODO: for now, just always assume we can accept another GPU command.
+        self.dma.gpu_list_req();
 
         let mdec_status = self.mdec.clock(cycles);
-        match mdec_status {
-            MDECStatus::DataInReady => self.dma.mdec_recv_req(),
-            MDECStatus::DataOutReady => self.dma.mdec_send_req(),
-            _ => {}
+        if mdec_status.data_in_ready {
+            self.dma.mdec_recv_req();
+        }
+        if mdec_status.data_out_ready {
+            self.dma.mdec_send_req();
         }
 
         let dma_irq = self.dma.check_irq();
@@ -95,6 +95,8 @@ impl MemBus {
         let cd_irq = self.cdrom.clock(cycles);
 
         let spu_irq = self.spu.clock(cycles);
+        // TODO: drive this properly...
+        self.dma.spu_req();
 
         let peripheral_irq = self.peripheral.clock(cycles);
 

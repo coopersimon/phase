@@ -5,10 +5,9 @@ use crate::{
 };
 use std::collections::VecDeque;
 
-pub enum MDECStatus {
-    None,
-    DataInReady,
-    DataOutReady,
+pub struct MDECStatus {
+    pub data_in_ready: bool,
+    pub data_out_ready: bool,
 }
 
 /// Motion decoder.
@@ -24,6 +23,8 @@ pub struct MDEC {
 
     in_fifo:                VecDeque<u16>,
     out_fifo:               VecDeque<u32>,
+    data_in_enable:         bool,
+    data_out_enable:        bool,
 
     /// DMA re-orders RGB15 and RGB24 blocks.
     /// If this is set to Some, it marks the width (in words)
@@ -49,6 +50,8 @@ impl MDEC {
 
             in_fifo:                VecDeque::new(),
             out_fifo:               VecDeque::new(),
+            data_in_enable:         false,
+            data_out_enable:        false,
 
             use_reorder:            None,
             dma_reorder_fifo:       VecDeque::new(),
@@ -68,24 +71,30 @@ impl MDEC {
                         while !self.in_fifo.is_empty() {
                             self.decode_macroblock(output_depth, signed, set_bit_15);
                         }
-                        if self.current_block != Block::Cr {
-                            panic!("MDEC block not ending on Cr!");
-                        }
                     },
                     SetQuantTable { use_color } => self.set_quant_table(use_color),
                     SetScaleTable => self.set_scale_table(),
                 }
+                if self.current_block != Block::Cr {
+                    panic!("MDEC block not ending on Cr!");
+                }
                 self.finish_command();
                 self.status.remove(Status::DataInFifoFull);
+            } else if self.in_fifo.len() > 4096 {
+                use Command::*;
+                match command {
+                    DecodeMacroblock { output_depth, signed, set_bit_15 } => {
+                        while self.in_fifo.len() > 128 {
+                            self.decode_macroblock(output_depth, signed, set_bit_15);
+                        }
+                    },
+                    _ => {},
+                }
             }
         }
-        // TODO: check bits instead?
-        if self.param_words_remaining > 0 && self.param_words_remaining % 0x20 == 0 {
-            MDECStatus::DataInReady
-        } else if !self.out_fifo.is_empty() && self.out_fifo.len() % 0x20 == 0 && self.dma_reorder_fifo.len() % 0x20 == 0 {
-            MDECStatus::DataOutReady
-        } else {
-            MDECStatus::None
+        MDECStatus {
+            data_in_ready: self.status.contains(Status::DataInReq),
+            data_out_ready: self.status.contains(Status::DataOutReq),
         }
     }
 }
@@ -133,6 +142,9 @@ impl DMADevice for MDEC {
         } else {
             self.read_data()
         };
+        if self.dma_reorder_fifo.is_empty() && self.out_fifo.is_empty() {
+            self.status.remove(Status::DataOutReq);
+        }
         Data { data, cycles: 1 }
     }
 
@@ -285,12 +297,8 @@ impl MDEC {
             self.param_words_remaining = 0;
             self.status = Status::Init;
         }
-        if control.contains(Control::EnableDataIn) {
-            self.status.insert(Status::DataInReq);
-        }
-        if control.contains(Control::EnableDataOut) {
-            self.status.insert(Status::DataOutReq);
-        }
+        self.data_in_enable = control.contains(Control::EnableDataIn);
+        self.data_out_enable = control.contains(Control::EnableDataOut);
     }
 
     fn write_command(&mut self, data: u32) {
@@ -302,6 +310,7 @@ impl MDEC {
             self.param_words_remaining -= 1;
             if self.param_words_remaining == 0 {
                 self.status.insert(Status::DataInFifoFull);
+                self.status.remove(Status::DataInReq);
             }
         } else {
             self.start_command(data);
@@ -318,6 +327,9 @@ impl MDEC {
         };
         self.command = Some(command);
         self.status.insert(Status::CommandBusy | Status::Mono);
+        if self.data_in_enable {
+            self.status.insert(Status::DataInReq);
+        }
         self.current_block = Block::Cr;
     }
 
@@ -329,33 +341,13 @@ impl MDEC {
                 let Some(mono_out) = self.process_mono(!signed) else {
                     return;
                 };
-                for i in 0..8 {
-                    let index = i * 8;
-                    let word = u32::from_le_bytes([
-                        combine_u8(mono_out[index], mono_out[index + 1]),
-                        combine_u8(mono_out[index + 2], mono_out[index + 3]),
-                        combine_u8(mono_out[index + 4], mono_out[index + 5]),
-                        combine_u8(mono_out[index + 6], mono_out[index + 7]),
-                    ]);
-                    self.out_fifo.push_back(word);
-                }
-                self.status.remove(Status::DataOutFifoEmpty);
+                self.output_mono4(&mono_out);
             },
             OutputDepth::Mono8 => {
                 let Some(mono_out) = self.process_mono(!signed) else {
                     return;
                 };
-                for i in 0..16 {
-                    let index = i * 4;
-                    let word = u32::from_le_bytes([
-                        mono_out[index],
-                        mono_out[index + 1],
-                        mono_out[index + 2],
-                        mono_out[index + 3],
-                    ]);
-                    self.out_fifo.push_back(word);
-                }
-                self.status.remove(Status::DataOutFifoEmpty);
+                self.output_mono8(&mono_out);
             },
             OutputDepth::RGB15 => {
                 match self.current_block {
@@ -476,6 +468,40 @@ impl MDEC {
         }
     }
 
+    fn output_mono4(&mut self, mono: &[u8]) {
+        for i in 0..8 {
+            let index = i * 8;
+            let word = u32::from_le_bytes([
+                combine_u8(mono[index + 0], mono[index + 1]),
+                combine_u8(mono[index + 2], mono[index + 3]),
+                combine_u8(mono[index + 4], mono[index + 5]),
+                combine_u8(mono[index + 6], mono[index + 7]),
+            ]);
+            self.out_fifo.push_back(word);
+        }
+        self.status.remove(Status::DataOutFifoEmpty);
+        if self.data_out_enable {
+            self.status.insert(Status::DataOutReq);
+        }
+    }
+
+    fn output_mono8(&mut self, mono: &[u8]) {
+        for i in 0..16 {
+            let index = i * 4;
+            let word = u32::from_le_bytes([
+                mono[index + 0],
+                mono[index + 1],
+                mono[index + 2],
+                mono[index + 3],
+            ]);
+            self.out_fifo.push_back(word);
+        }
+        self.status.remove(Status::DataOutFifoEmpty);
+        if self.data_out_enable {
+            self.status.insert(Status::DataOutReq);
+        }
+    }
+
     fn output_rgb15(&mut self, rgb: &[u8], set_bit_15: bool) {
         let hi = if set_bit_15 {0x8000} else {0};
         for i in 0..32 {
@@ -496,6 +522,9 @@ impl MDEC {
             self.out_fifo.push_back(data);
         }
         self.status.remove(Status::DataOutFifoEmpty);
+        if self.data_out_enable {
+            self.status.insert(Status::DataOutReq);
+        }
     }
 
     fn output_rgb24(&mut self, rgb: &[u8]) {
@@ -510,6 +539,9 @@ impl MDEC {
             self.out_fifo.push_back(data);
         }
         self.status.remove(Status::DataOutFifoEmpty);
+        if self.data_out_enable {
+            self.status.insert(Status::DataOutReq);
+        }
     }
 
     fn set_quant_table(&mut self, use_color: bool) {
@@ -550,11 +582,12 @@ impl MDEC {
             }
         }
         self.command = None;
-        self.status.remove(Status::CommandBusy | Status::CurrentBlock);
+        self.status.remove(Status::CommandBusy | Status::CurrentBlock | Status::DataInReq);
         self.current_block = Block::None;
     }
 }
 
+/// Inverse zig-zag lookup table.
 const ZAGZIG: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10,
     17, 24, 32, 25, 18, 11, 4, 5,
@@ -569,6 +602,7 @@ const ZAGZIG: [usize; 64] = [
 fn decode_block(data_in: &mut VecDeque<u16>, quant_table: &[u8; 64], scale_table: &[i16; 64], block_out: &mut [i16]) -> bool {
     let mut out_idx = 0;
     while let Some(data) = data_in.front() {
+        // Padding code.
         if *data != 0xFE00 {
             break;
         }
@@ -577,13 +611,13 @@ fn decode_block(data_in: &mut VecDeque<u16>, quant_table: &[u8; 64], scale_table
     let Some(first_data) = data_in.pop_front() else {
         return false;
     };
-    let scale = (first_data >> 10) as i32;
+    let quant_factor = (first_data >> 10) as i32;
     {
-        let val = sign_extend_10(first_data);
-        if scale == 0 {
-            block_out[out_idx] = val << 1;
+        let direct_current = sign_extend_10(first_data);
+        if quant_factor == 0 {
+            block_out[out_idx] = direct_current << 1;
         } else {
-            let val = val * quant_table[0] as i16;
+            let val = direct_current * quant_table[0] as i16;
             block_out[ZAGZIG[out_idx]] = val.clamp(-0x400, 0x3FF);
         }
     }
@@ -593,11 +627,11 @@ fn decode_block(data_in: &mut VecDeque<u16>, quant_table: &[u8; 64], scale_table
         if out_idx > 63 {
             break;
         }
-        let val = sign_extend_10(data);
-        if scale == 0 {
-            block_out[out_idx] = val << 1;
+        let relative = sign_extend_10(data);
+        if quant_factor == 0 {
+            block_out[out_idx] = relative << 1;
         } else {
-            let val = ((val as i32 * quant_table[out_idx] as i32 * scale + 4) / 8) as i16;
+            let val = ((relative as i32 * quant_table[out_idx] as i32 * quant_factor + 4) / 8) as i16;
             block_out[ZAGZIG[out_idx]] = val.clamp(-0x400, 0x3FF);
         }
     }
@@ -617,6 +651,7 @@ fn process_core(block: &mut [i16], scale_table: &[i16; 64]) {
                     let n = src[z + y] as i32 * (scale_table[z + x] as i32 / 8);
                     acc + n
                 });
+                // Round.
                 dst[col_offset + x] = ((sum + 0xFFF) / 0x2000) as i16;
             }
         }
@@ -626,6 +661,7 @@ fn process_core(block: &mut [i16], scale_table: &[i16; 64]) {
     }
 }
 
+/// Directly output macroblock as monochrome.
 fn y_to_mono(block: &[i16], unsigned: bool, out: &mut [u8]) {
     for i in 0..64 {
         let y = block[i] << 7 >> 7;                        // Clip to 9 bits
@@ -638,6 +674,8 @@ fn y_to_mono(block: &[i16], unsigned: bool, out: &mut [u8]) {
     }
 }
 
+/// Combine luminance and chrominance blocks together,
+/// to form RGB8 output.
 fn yuv_to_rgb(lum: &[i16], cr: &[i16], cb: &[i16], unsigned: bool, x_offset: usize, y_offset: usize, out: &mut [u8]) {
     for y in 0..8 {
         let lum_y = y * 8;
