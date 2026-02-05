@@ -1,9 +1,9 @@
 use super::{
-    RendererImpl, Coord, Size, Color, Vertex, TexInfo, TexMode, TexCoord
+    RendererImpl, Coord, Size, Color, Vertex, TexInfo, TexMode, TexCoord, TransparencyMode
 };
 
 use crate::{
-    Frame, gpu::InterlaceState
+    Frame, gpu::InterlaceState, utils::bits::*
 };
 
 struct DrawingArea {
@@ -32,6 +32,11 @@ pub struct SoftwareRenderer {
     drawing_area: DrawingArea,
     draw_offset: Coord,
     tex_window: TextureWindow,
+
+    trans_mode: TransparencyMode,
+    dither: bool,
+    set_mask_bit: bool,
+    check_mask_bit: bool,
 }
 
 impl SoftwareRenderer {
@@ -44,21 +49,28 @@ impl SoftwareRenderer {
             frame_pos: Coord { x: 0, y: 0 },
             drawing_area: DrawingArea { top: 0, bottom: 0, left: 0, right: 0 },
             draw_offset: Coord { x: 0, y: 0 },
-            tex_window: TextureWindow { mask_s: 0, mask_t: 0, offset_s: 0, offset_t: 0 }
+            tex_window: TextureWindow { mask_s: 0, mask_t: 0, offset_s: 0, offset_t: 0 },
+
+            trans_mode: TransparencyMode::Average,
+            dither: false,
+            set_mask_bit: false,
+            check_mask_bit: false,
         }
     }
 }
 
 impl RendererImpl for SoftwareRenderer {
-    fn get_frame(&mut self, frame: &mut Frame, interlace_state: InterlaceState, rgb24: bool) {
+    fn get_frame(&mut self, frame: &mut Frame, _interlace_state: InterlaceState, rgb24: bool) {
         if self.enable_display {
             let line_size = (self.resolution.width as usize) * 4;
-            for y in 0..240 {
-                let y = match interlace_state {
+            for y in 0..self.resolution.height as usize {
+                // TODO: interlaced rendering makes a cool effect, but overflows memory sometimes
+                // for as of yet unknown reasons.
+                /*let y = match interlace_state {
                     InterlaceState::Off => y,
                     InterlaceState::Even => y * 2,
                     InterlaceState::Odd => y * 2 + 1,
-                };
+                };*/
                 let mut frame_idx = y * line_size;
                 let mut vram_addr = Coord {x: self.frame_pos.x, y: self.frame_pos.y + (y as i16)}.get_vram_idx();
                 if rgb24 {
@@ -136,6 +148,11 @@ impl RendererImpl for SoftwareRenderer {
         self.resolution = res;
     }
 
+    fn set_draw_mode(&mut self, trans_mode: super::TransparencyMode, dither: bool) {
+        self.trans_mode = trans_mode;
+        self.dither = dither;
+    }
+
     fn set_texture_window(&mut self, mask_s: u8, mask_t: u8, offset_s: u8, offset_t: u8) {
         self.tex_window.mask_s = mask_s;
         self.tex_window.mask_t = mask_t;
@@ -159,7 +176,8 @@ impl RendererImpl for SoftwareRenderer {
     }
 
     fn set_mask_settings(&mut self, set_mask_bit: bool, check_mask_bit: bool) {
-        // TODO: set
+        self.set_mask_bit = set_mask_bit;
+        self.check_mask_bit = check_mask_bit;
     }
 
     fn fill_rectangle(&mut self, color: Color, top_left: Coord, size: Size) {
@@ -173,19 +191,20 @@ impl RendererImpl for SoftwareRenderer {
     }
 
     fn draw_triangle(&mut self, vertices: &[Vertex], transparent: bool) {
-        self.rasterize_triangle(vertices, |_: &Self, line: &Line| {
-            Some(line.get_color())
+        self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
+            let color = line.get_color();
+            renderer.write_pixel(addr, &color, transparent);
         });
     }
 
     fn draw_triangle_tex(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool) {
-        self.rasterize_triangle(vertices, |renderer: &Self, line: &Line| {
+        self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
             let tex_color = renderer.tex_lookup(&line.get_tex_coords(), tex_info);
-            if tex_color == 0 {
-                None
-            } else {
-                let frag_color = line.get_color();
-                Some(frag_color.blend(&Color::from_rgb15(tex_color)))
+            if tex_color != 0 {
+                let color = line.get_color();
+                let frag_color = color.blend(&Color::from_rgb15(tex_color), !renderer.set_mask_bit);
+                let transparent = transparent && test_bit!(tex_color, 15);
+                renderer.write_pixel(addr, &frag_color, transparent);
             }
         });
     }
@@ -203,7 +222,7 @@ impl RendererImpl for SoftwareRenderer {
             let line_addr = (y as usize) * 1024;
             for x in x_min..x_max {
                 let addr = line_addr + (x as usize);
-                self.vram[addr] = color.to_rgb15();
+                self.write_pixel(addr, &color, transparent);
             }
         }
     }
@@ -231,7 +250,9 @@ impl RendererImpl for SoftwareRenderer {
                 let tex_color = self.tex_lookup(&current_tex_coord, tex_info);
                 if tex_color != 0 {
                     let addr = line_addr + (x as usize);
-                    self.vram[addr] = color.blend(&Color::from_rgb15(tex_color)).to_rgb15();
+                    let frag_color = color.blend(&Color::from_rgb15(tex_color), !self.set_mask_bit);
+                    let transparent = transparent && test_bit!(tex_color, 15);
+                    self.write_pixel(addr, &frag_color, transparent);
                 }
                 current_tex_coord.s += 1;
             }
@@ -243,7 +264,20 @@ impl RendererImpl for SoftwareRenderer {
 
 // Internal
 impl SoftwareRenderer {
-    fn rasterize_triangle<F: Fn(&Self, &Line) -> Option<Color>>(&mut self, vertices: &[Vertex], raster_f: F) {
+    #[inline(always)]
+    fn write_pixel(&mut self, addr: usize, color: &Color, transparent: bool) {
+        if !self.check_mask_bit || !test_bit!(self.vram[addr], 15) {
+            let color = if transparent {
+                let base_color = Color::from_rgb15(self.vram[addr]);
+                self.trans_mode.blend(&base_color, color)
+            } else {
+                *color
+            };
+            self.vram[addr] = color.to_rgb15();
+        }
+    }
+
+    fn rasterize_triangle<F: Fn(&mut Self, &Line, usize)>(&mut self, vertices: &[Vertex], raster_f: F) {
         let mut min_y = std::i16::MAX;
         let mut max_y = std::i16::MIN;
         //println!("Draw triangle:");
@@ -274,7 +308,7 @@ impl SoftwareRenderer {
         };
     }
 
-    fn draw_lines<F: Fn(&Self, &Line) -> Option<Color>>(&mut self, min_y: i16, lines: &mut Lines, raster_f: &F) {
+    fn draw_lines<F: Fn(&mut Self, &Line, usize)>(&mut self, min_y: i16, lines: &mut Lines, raster_f: &F) {
         let base_y = min_y + self.draw_offset.y;
         if base_y < self.drawing_area.top {
             lines.left.mul((self.drawing_area.top - base_y) as i32);
@@ -300,10 +334,8 @@ impl SoftwareRenderer {
                     line.mul((self.drawing_area.left - left) as i32);
                 }
                 for x in min_x..max_x {
-                    if let Some(col) = raster_f(self, &line) {
-                        let addr = line_addr + (x as usize);
-                        self.vram[addr] = col.to_rgb15();
-                    }
+                    let addr = line_addr + (x as usize);
+                    raster_f(self, &line, addr);
                     line.inc();
                 }
             }
@@ -476,6 +508,7 @@ impl Line {
             r: ((self.r.val + 0x8000) >> 16) as u8,
             g: ((self.g.val + 0x8000) >> 16) as u8,
             b: ((self.b.val + 0x8000) >> 16) as u8,
+            mask: 0,
         }
     }
     fn get_tex_coords(&self) -> TexCoord {

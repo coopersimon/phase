@@ -271,7 +271,7 @@ impl Renderer {
             0xE5 => self.set_draw_offset(data),
             0xE6 => self.mask_bit_setting(data),
 
-            _ => panic!("Invalid GP0 command: {:X}", data),
+            _ => println!("Invalid GP0 command: {:X}", data),
         }
         self.status.insert(GPUStatus::CommandReady);
         self.update_status();
@@ -597,7 +597,15 @@ impl Renderer {
 
         // TODO: x-flip and y-flip
 
-        // TODO: inform renderer.
+        let trans_mode = match (self.status & GPUStatus::SemiTrans).bits() >> 5 {
+            0b00 => TransparencyMode::Average,
+            0b01 => TransparencyMode::Add,
+            0b10 => TransparencyMode::Subtract,
+            0b11 => TransparencyMode::Combine,
+            _ => unreachable!()
+        };
+        let dither = self.status.contains(GPUStatus::Dither);
+        self.renderer.set_draw_mode(trans_mode, dither);
     }
 
     fn texture_window_setting(&mut self, param: u32) {
@@ -730,6 +738,7 @@ trait RendererImpl {
     fn set_display_range_y(&mut self, begin: u32, end: u32);
     fn set_display_resolution(&mut self, res: Size);
 
+    fn set_draw_mode(&mut self, trans_mode: TransparencyMode, dither: bool);
     fn set_texture_window(&mut self, mask_s: u8, mask_t: u8, offset_s: u8, offset_t: u8);
     fn set_draw_area_top_left(&mut self, left: i16, top: i16);
     fn set_draw_area_bottom_right(&mut self, right: i16, bottom: i16);
@@ -790,6 +799,7 @@ struct Color {
     r: u8,
     g: u8,
     b: u8,
+    mask: u16,
 }
 
 impl Default for Color {
@@ -798,6 +808,7 @@ impl Default for Color {
             r: 0x80,
             g: 0x80,
             b: 0x80,
+            mask: 0,
         }
     }
 }
@@ -807,10 +818,12 @@ impl Color {
         let r = (rgb & 0x1F) as u8;
         let g = ((rgb >> 5) & 0x1F) as u8;
         let b = ((rgb >> 10) & 0x1F) as u8;
+        let mask = rgb & 0x8000;
         Self {
             r: (r << 3) | (r >> 2),
             g: (g << 3) | (g >> 2),
             b: (b << 3) | (b >> 2),
+            mask,
         }
     }
 
@@ -819,6 +832,7 @@ impl Color {
             r: (rgb & 0xFF) as u8,
             g: ((rgb >> 8) & 0xFF) as u8,
             b: ((rgb >> 16) & 0xFF) as u8,
+            mask: 0,
         }
     }
 
@@ -826,14 +840,17 @@ impl Color {
         let r = (self.r >> 3) as u16;
         let g = (self.g >> 3) as u16;
         let b = (self.b >> 3) as u16;
-        r | (g << 5) | (b << 10)
+        self.mask | r | (g << 5) | (b << 10)
     }
 
-    fn blend(&self, other: &Color) -> Color {
+    /// Blend a color with another. The other color is usually a texture color.
+    /// Takes the mask of "other" (i.e. the texture) if specified.
+    fn blend(&self, other: &Color, use_other_mask: bool) -> Color {
         Color {
             r: (((self.r as u16) * (other.r as u16)) >> 7).try_into().unwrap_or(0xFF),
             g: (((self.g as u16) * (other.g as u16)) >> 7).try_into().unwrap_or(0xFF),
             b: (((self.b as u16) * (other.b as u16)) >> 7).try_into().unwrap_or(0xFF),
+            mask: if use_other_mask {other.mask} else {0x8000},
         }
     }
 }
@@ -934,4 +951,48 @@ enum TexMode {
     Palette8,
     /// RGB-15
     Direct,
+}
+
+#[derive(Clone, Copy)]
+enum TransparencyMode {
+    /// Base / 2 + Frag / 2
+    Average,
+    /// Base + Frag
+    Add,
+    /// Base - Frag
+    Subtract,
+    /// Base + (Frag / 4)
+    Combine,
+}
+
+impl TransparencyMode {
+    fn blend(&self, a: &Color, b: &Color) -> Color {
+        use TransparencyMode::*;
+        match self {
+            Average => Color {
+                r: (a.r >> 1) + (b.r >> 1),
+                g: (a.g >> 1) + (b.g >> 1),
+                b: (a.b >> 1) + (b.b >> 1),
+                mask: a.mask, // ?
+            },
+            Add => Color {
+                r: a.r.saturating_add(b.r),
+                g: a.g.saturating_add(b.g),
+                b: a.b.saturating_add(b.b),
+                mask: a.mask, // ?
+            },
+            Subtract => Color {
+                r: a.r.saturating_sub(b.r),
+                g: a.g.saturating_sub(b.g),
+                b: a.b.saturating_sub(b.b),
+                mask: a.mask, // ?
+            },
+            Combine => Color {
+                r: a.r.saturating_add(b.r >> 2),
+                g: a.g.saturating_add(b.g >> 2),
+                b: a.b.saturating_add(b.b >> 2),
+                mask: a.mask, // ?
+            }
+        }
+    }
 }
