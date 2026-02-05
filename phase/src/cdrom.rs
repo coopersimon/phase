@@ -832,12 +832,11 @@ impl CDROM {
     }
 
     fn get_param(&mut self) -> DriveResult<()> {
-        unimplemented!("get param");
         self.send_response(self.drive_status.bits(), 3);
-        // TODO: send mode
-        //  send 00
-        // send file filter
-        // send channel filter
+        self.send_response(self.mode.bits(), 3);
+        self.send_response(0x00, 3);
+        self.send_response(self.file_filter, 3);
+        self.send_response(self.channel_filter, 3);
         self.command_complete()
     }
 
