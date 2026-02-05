@@ -35,9 +35,13 @@ impl ControllerState {
         data[1] = self.buttons.bits();
         if let Some(left) = self.left_stick {
             data[2] = left.get_binary();
+        } else {
+            data[2] = 0x0000;
         }
         if let Some(right) = self.right_stick {
             data[3] = right.get_binary();
+        } else {
+            data[3] = 0x0000;
         }
     }
 }

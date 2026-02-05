@@ -26,8 +26,8 @@ pub struct PeripheralPort {
     irq_countdown: usize,
 
     // Devices:
-    port_1_controller: [u16; 4],
-    port_2_controller: [u16; 4],
+    port_1_controller: ControllerData,
+    port_2_controller: ControllerData,
 }
 
 impl PeripheralPort {
@@ -46,8 +46,8 @@ impl PeripheralPort {
             transfer_active: false,
             irq_countdown: 0,
 
-            port_1_controller: [0xFFFF; 4],
-            port_2_controller: [0xFFFF; 4],
+            port_1_controller: ControllerData::new(),
+            port_2_controller: ControllerData::new(),
         }
     }
 
@@ -65,6 +65,7 @@ impl PeripheralPort {
         if self.irq_countdown > 0 {
             self.irq_countdown = self.irq_countdown.saturating_sub(cycles);
             if self.irq_countdown == 0 {
+                self.status.remove(JoypadStatus::AckInputLevel); // ?
                 self.status.insert(JoypadStatus::IRQ);
                 Interrupt::Peripheral
             } else {
@@ -77,15 +78,15 @@ impl PeripheralPort {
 
     pub fn set_controller_state(&mut self, port: Port, state: ControllerState) {
         match port {
-            Port::One => state.get_binary(&mut self.port_1_controller),
-            Port::Two => state.get_binary(&mut self.port_2_controller),
+            Port::One => state.get_binary(&mut self.port_1_controller.output_data),
+            Port::Two => state.get_binary(&mut self.port_2_controller.output_data),
         }
     }
 
     pub fn clear_controller_state(&mut self, port: Port) {
         match port {
-            Port::One => self.port_1_controller.fill(0xFFFF),
-            Port::Two => self.port_1_controller.fill(0xFFFF),
+            Port::One => self.port_1_controller.output_data.fill(0xFFFF),// TODO: analog = 0?
+            Port::Two => self.port_1_controller.output_data.fill(0xFFFF),// TODO: analog = 0?
         }
     }
 }
@@ -203,10 +204,11 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum TransferMode {
     None,
     Controller(u8),
+    Multitap(u8),
     MemCard(u8),
 }
 
@@ -216,6 +218,8 @@ impl PeripheralPort {
         self.in_fifo.push_back(data);
         self.transfer_active = true;
         self.reload_baudrate(0);
+        self.status.insert(JoypadStatus::TXReady1);
+        self.status.remove(JoypadStatus::TXReady2);
     }
 
     fn receive_data(&mut self) -> u32 {
@@ -243,12 +247,13 @@ impl PeripheralPort {
     fn set_control(&mut self, data: u16) {
         let control = JoypadControl::from_bits_truncate(data);
         if control.contains(JoypadControl::ACK) {
-            self.status.remove(JoypadStatus::IRQ | JoypadStatus::RXParityError);
+            self.status.remove(JoypadStatus::IRQ.union(JoypadStatus::RXParityError));
         }
         if control.contains(JoypadControl::Reset) {
-            // ? TODO
+            // TODO: A little unsure what this should actually reset.
+            self.transfer_mode = TransferMode::None;
         }
-        self.control = control & JoypadControl::Writable;
+        self.control = control.intersection(JoypadControl::Writable);
         if control.contains(JoypadControl::JoyNOutput) {
             self.slot_select = if control.contains(JoypadControl::SlotSelect) {1} else {0};
             //self.control.insert(JoypadControl::RXEnable);
@@ -274,7 +279,7 @@ impl PeripheralPort {
     }
 
     fn reload_baudrate(&mut self, offset: u32) {
-        let multiply_factor = match (self.mode & JoypadMode::BaudrateReloadFactor).bits() {
+        let multiply_factor = match self.mode.intersection(JoypadMode::BaudrateReloadFactor).bits() {
             2 => 16,
             3 => 32,
             _ => 1
@@ -286,10 +291,12 @@ impl PeripheralPort {
     /// When we have clocked enough cycles,
     /// we can process some data.
     fn process_data(&mut self) {
-        self.status.remove(JoypadStatus::AckInputLevel | JoypadStatus::TXReady1);
+        self.status.remove(JoypadStatus::TXReady1);
         let Some(data_in) = self.in_fifo.pop_front() else {
+            panic!("no data to process");
             return;
         };
+        //println!("Peripheral in: {:X} (state: {:?})", data_in, self.transfer_mode);
         self.transfer_active = !self.in_fifo.is_empty();
         match self.transfer_mode {
             TransferMode::None => {
@@ -303,25 +310,21 @@ impl PeripheralPort {
                     panic!("unrecognised peripheral data {:X}", data_in);
                 }
             },
-            TransferMode::Controller(n) => {
+            TransferMode::Controller(n) => self.process_controller_mode(data_in, n),
+            TransferMode::Multitap(n) => {
+                // For now: just send 1 controller.
                 let controller = if self.control.contains(JoypadControl::SlotSelect) {
                     &self.port_2_controller
                 } else {
                     &self.port_1_controller
                 };
-                // TODO: better manage size...
                 let (transfer_mode, data) = match n {
-                    0 => (TransferMode::Controller(1), controller[0].to_le_bytes()[0]),
-                    1 => {
-                        let data = controller[0].to_le_bytes()[1];
-                        if data == 0xFF {
-                            (TransferMode::None, 0xFF)
-                        } else {
-                            (TransferMode::Controller(2), data)
-                        }
-                    },
-                    2 => (TransferMode::Controller(3), controller[1].to_le_bytes()[0]),
-                    3 => (TransferMode::None, controller[1].to_le_bytes()[1]),
+                    0 => (TransferMode::Multitap(1), controller.output_data[0].to_le_bytes()[0]),
+                    1 => (TransferMode::Multitap(2), controller.output_data[0].to_le_bytes()[1]),
+                    2 => (TransferMode::Multitap(3), controller.output_data[1].to_le_bytes()[0]),
+                    3 => (TransferMode::Multitap(4), controller.output_data[1].to_le_bytes()[1]),
+                    4..=30 => (TransferMode::Multitap(n+1), 0xFF),
+                    31 => (TransferMode::None, 0xFF),
                     _ => unreachable!()
                 };
                 self.transfer_mode = transfer_mode;
@@ -355,11 +358,147 @@ impl PeripheralPort {
         }
     }
 
+    fn process_controller_mode(&mut self, data_in: u8, n: u8) {
+        let controller = if self.control.contains(JoypadControl::SlotSelect) {
+            &mut self.port_2_controller
+        } else {
+            &mut self.port_1_controller
+        };
+        let (transfer_mode, data) = if controller.config_mode {
+            match n {
+                0 => {
+                    controller.config_command = data_in;
+                    match data_in {
+                        0x42 => { // Buttons: leave alone.
+                            controller.config_data.clone_from_slice(&controller.output_data[1..]);
+                        },
+                        0x43 => {
+                            controller.config_data.fill(0);
+                        },
+                        0x44 => { // set LED state
+                            controller.config_data.fill(0);
+                        },
+                        0x45 => { // get LED state
+                            controller.config_data[0] = 0x0201;
+                            controller.config_data[1] = 0x0200; // TODO: lower-byte: analog mode.
+                            controller.config_data[2] = 0x0001;
+                        },
+                        0x46 => { // pad info act
+                            controller.config_data[0] = 0x0000;
+                        },
+                        0x47 => { // unknown?
+                            controller.config_data[0] = 0x0000;
+                            controller.config_data[1] = 0x0002;
+                            controller.config_data[2] = 0x0001;
+                        },
+                        0x4C => { // get variable response
+                            controller.config_data.fill(0);
+                        },
+                        0x4D => { // get/set rumble protocol
+                            controller.config_data.fill(0xFF); // TODO: actually implement this
+                        },
+                        _ => panic!("unrecognised controller config mode {:X}", data_in),
+                    }
+                    (TransferMode::Controller(1), 0xF3)
+                },
+                1 => (TransferMode::Controller(2), 0x5A), // Data should be 0x00
+                2 => {
+                    match controller.config_command {
+                        0x42 => {},
+                        0x43 => match data_in {
+                            0x00 => controller.config_pending = false, // Exit config mode
+                            0x01 => controller.config_pending = true, // Stay in config mode.
+                            _ => panic!("unrecognised config mode command {:X}", data_in),
+                        },
+                        0x44 => {}, // TODO: led state
+                        0x45 => {},
+                        0x46 => match data_in { // pad info act
+                            0x00 => {
+                                controller.config_data[1] = 0x0201;
+                                controller.config_data[2] = 0x0A00;
+                            },
+                            0x01 => {
+                                controller.config_data[1] = 0x0101;
+                                controller.config_data[2] = 0x1401;
+                            },
+                            _ => {
+                                controller.config_data[1] = 0x0000;
+                                controller.config_data[2] = 0x0000;
+                            }
+                        },
+                        0x47 => {},
+                        0x4C => match data_in {
+                            0x00 => controller.config_data[1] = 0x0400,
+                            0x01 => controller.config_data[1] = 0x0700,
+                            _ => controller.config_data[1] = 0x0000,
+                        },
+                        0x4D => {}, // TODO.
+                        _ => unreachable!(),
+                    }
+                    (TransferMode::Controller(3), controller.config_data[0].to_le_bytes()[0])
+                },
+                3 => (TransferMode::Controller(4), controller.config_data[0].to_le_bytes()[1]),
+                4 => (TransferMode::Controller(5), controller.config_data[1].to_le_bytes()[0]),
+                5 => (TransferMode::Controller(6), controller.config_data[1].to_le_bytes()[1]),
+                6 => (TransferMode::Controller(7), controller.config_data[2].to_le_bytes()[0]),
+                7 => {
+                    if !controller.config_pending {
+                        controller.config_mode = false;
+                    }
+                    (TransferMode::None, controller.config_data[2].to_le_bytes()[1])
+                },
+                _ => unreachable!(),
+            }
+        } else {
+            match n {
+                0 => {
+                    if data_in == 0x43 {
+                        controller.config_pending = true;
+                    } else if data_in != 0x42 {
+                        panic!("Unexpected data in after controller select: {:X}", data_in);
+                    }
+                    (TransferMode::Controller(1), controller.output_data[0].to_le_bytes()[0])
+                },
+                1 => {
+                    let data = controller.output_data[0].to_le_bytes()[1];
+                    if data == 0xFF {
+                        (TransferMode::None, 0xFF)
+                    } else {
+                        //if data_in == 0x01 { // TODO:
+                        //    (TransferMode::Multitap(0), data)
+                        //} else {
+                            (TransferMode::Controller(2), data)
+                        //}
+                    }
+                },
+                2 => {
+                    if controller.config_pending {
+                        match data_in {
+                            0x00 => controller.config_pending = false, // Exit config mode
+                            0x01 => controller.config_pending = true, // Stay in config mode.
+                            _ => panic!("unrecognised config mode command {:X}", data_in),
+                        }
+                    }
+                    (TransferMode::Controller(3), controller.output_data[1].to_le_bytes()[0])
+                },
+                3 => {
+                    if controller.config_pending {
+                        controller.config_mode = true;
+                    }
+                    (TransferMode::None, controller.output_data[1].to_le_bytes()[1])
+                },
+                _ => unreachable!()
+            }
+        };
+        self.transfer_mode = transfer_mode;
+        self.push_data(data);
+    }
+
     fn push_data(&mut self, data: u8) {
         //if self.control.contains(JoypadControl::RXEnable) {
             self.out_fifo.push_back(data);
             if self.control.contains(JoypadControl::RXIntEnable) {
-                let rx_int_mode = (self.control & JoypadControl::RXIntMode).bits() >> 8;
+                let rx_int_mode = self.control.intersection(JoypadControl::RXIntMode).bits() >> 8;
                 let out_fifo_len = 1 << rx_int_mode;
                 if self.out_fifo.len() == out_fifo_len {
                     self.trigger_irq();
@@ -370,5 +509,27 @@ impl PeripheralPort {
 
     fn trigger_irq(&mut self) {
         self.irq_countdown = 100;
+    }
+}
+
+struct ControllerData {
+    output_data: [u16; 4],
+    // TODO: config mode feels messy
+    config_mode: bool, // TODO: one per controller?
+    config_command: u8,
+    config_data: [u16; 3],
+    config_pending: bool,
+}
+
+impl ControllerData {
+    fn new() -> Self {
+        Self {
+            output_data: [0xFFFF, 0xFFFF, 0x0000, 0x0000],
+
+            config_mode: false,
+            config_command: 0,
+            config_data: [0; 3],
+            config_pending: false,
+        }
     }
 }
