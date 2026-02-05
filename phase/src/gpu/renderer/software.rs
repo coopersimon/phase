@@ -32,6 +32,8 @@ pub struct SoftwareRenderer {
     drawing_area: DrawingArea,
     draw_offset: Coord,
     tex_window: TextureWindow,
+    interlace: bool,
+    display_height: u16,
 
     trans_mode: TransparencyMode,
     dither: bool,
@@ -50,6 +52,8 @@ impl SoftwareRenderer {
             drawing_area: DrawingArea { top: 0, bottom: 0, left: 0, right: 0 },
             draw_offset: Coord { x: 0, y: 0 },
             tex_window: TextureWindow { mask_s: 0, mask_t: 0, offset_s: 0, offset_t: 0 },
+            interlace: false,
+            display_height: 240,
 
             trans_mode: TransparencyMode::Average,
             dither: false,
@@ -63,7 +67,9 @@ impl RendererImpl for SoftwareRenderer {
     fn get_frame(&mut self, frame: &mut Frame, _interlace_state: InterlaceState, rgb24: bool) {
         if self.enable_display {
             let line_size = (self.resolution.width as usize) * 4;
-            for y in 0..self.resolution.height as usize {
+            let display_height = if self.interlace {self.display_height * 2} else {self.display_height};
+            let height = self.resolution.height.min(display_height) as usize;
+            for y in 0..height {
                 // TODO: interlaced rendering makes a cool effect, but overflows memory sometimes
                 // for as of yet unknown reasons.
                 /*let y = match interlace_state {
@@ -138,14 +144,16 @@ impl RendererImpl for SoftwareRenderer {
     fn set_display_offset(&mut self, offset: Coord) {
         self.frame_pos = offset;
     }
-    fn set_display_range_x(&mut self, begin: u32, end: u32) {
-        
+    fn set_display_range_x(&mut self, _begin: u32, _end: u32) {
+        //println!("Display X: {} => {}", begin, end);
     }
     fn set_display_range_y(&mut self, begin: u32, end: u32) {
-        
+        //println!("Display Y: {} => {}", begin, end);
+        self.display_height = (end - begin) as u16;
     }
-    fn set_display_resolution(&mut self, res: Size) {
+    fn set_display_resolution(&mut self, res: Size, interlace: bool) {
         self.resolution = res;
+        self.interlace = interlace;
     }
 
     fn set_draw_mode(&mut self, trans_mode: super::TransparencyMode, dither: bool) {

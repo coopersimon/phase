@@ -167,8 +167,8 @@ impl Renderer {
     }
 
     fn display_range_y(&mut self, range: u32) {
-        let begin = range & 0x7FF;
-        let end = (range >> 10) & 0x7FF;
+        let begin = range & 0x3FF;
+        let end = (range >> 10) & 0x3FF;
         self.renderer.set_display_range_y(begin, end);
     }
 
@@ -180,7 +180,8 @@ impl Renderer {
         let v_res = self.status.v_res();
         self.frame.lock().unwrap().resize((h_res, v_res));
         //self.frame.lock().unwrap().resize((1024, 512));
-        self.renderer.set_display_resolution(Size { width: h_res as u16, height: v_res as u16 });
+        let interlace = self.status.contains(GPUStatus::Interlace);
+        self.renderer.set_display_resolution(Size { width: h_res as u16, height: v_res as u16 }, interlace);
     }
 
     fn tex_disable(&mut self, disable: bool) {
@@ -736,7 +737,7 @@ trait RendererImpl {
     fn set_display_offset(&mut self, offset: Coord);
     fn set_display_range_x(&mut self, begin: u32, end: u32);
     fn set_display_range_y(&mut self, begin: u32, end: u32);
-    fn set_display_resolution(&mut self, res: Size);
+    fn set_display_resolution(&mut self, res: Size, interlace: bool);
 
     fn set_draw_mode(&mut self, trans_mode: TransparencyMode, dither: bool);
     fn set_texture_window(&mut self, mask_s: u8, mask_t: u8, offset_s: u8, offset_t: u8);
