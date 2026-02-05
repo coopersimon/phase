@@ -160,10 +160,10 @@ impl DMA {
     fn set_interrupt(&mut self, data: u32) {
         let input = DMAInterrupt::from_bits_truncate(data);
         let irq = self.interrupt.contains(DMAInterrupt::InterruptReq);
-        let flags = self.interrupt & DMAInterrupt::IRQFlags;
-        self.interrupt = input & DMAInterrupt::Writable;
+        let flags = self.interrupt.intersection(DMAInterrupt::IRQFlags);
+        self.interrupt = input.intersection(DMAInterrupt::Writable);
         self.interrupt.insert(flags);
-        self.interrupt.remove(input & DMAInterrupt::IRQFlags); // Acknowledge IRQs.
+        self.interrupt.remove(input.intersection(DMAInterrupt::IRQFlags)); // Acknowledge IRQs.
         if self.interrupt.contains(DMAInterrupt::ForceIRQ) ||
             (self.interrupt.contains(DMAInterrupt::EnableIRQ) && self.interrupt.intersects(DMAInterrupt::IRQFlags)) {
             self.interrupt.insert(DMAInterrupt::InterruptReq);
@@ -386,7 +386,7 @@ impl DMAChannel {
     }
 
     fn get_mode(&self) -> u32 {
-        (self.control & ChannelControl::SyncMode).bits() >> 9
+        (self.control.intersection(ChannelControl::SyncMode)).bits() >> 9
     }
 
     fn set_addr(&mut self, data: u32) {

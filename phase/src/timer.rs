@@ -30,31 +30,31 @@ impl Timers {
         let entered_h_blank = self.set_blanks(gpu.in_h_blank, gpu.in_v_blank);
         if self.timers[0].use_sys_clock() {
             if self.timers[0].clock(cycles) {
-                interrupt |= Interrupt::Timer0;
+                interrupt.insert(Interrupt::Timer0);
             }
         } else { // Dot clock.
             if self.timers[0].clock(gpu.dots) {
-                interrupt |= Interrupt::Timer0;
+                interrupt.insert(Interrupt::Timer0);
             }
         }
         if self.timers[1].use_sys_clock() {
             if self.timers[1].clock(cycles) {
-                interrupt |= Interrupt::Timer1;
+                interrupt.insert(Interrupt::Timer1);
             }
         } else if entered_h_blank { // H-blank.
             if self.timers[1].clock(1) {
-                interrupt |= Interrupt::Timer1;
+                interrupt.insert(Interrupt::Timer1);
             }
         }
         if self.timers[2].use_sys_clock() {
             if self.timers[2].clock(cycles) {
-                interrupt |= Interrupt::Timer2;
+                interrupt.insert(Interrupt::Timer2);
             }
         } else { // Clock / 8.
             self.clock_div += cycles;
             if self.clock_div >= 8 {
                 if self.timers[2].clock(self.clock_div / 8) {
-                    interrupt |= Interrupt::Timer2;
+                    interrupt.insert(Interrupt::Timer2);
                 }
                 self.clock_div = self.clock_div % 8;
             }
@@ -184,14 +184,14 @@ impl Timer {
     fn write_mode(&mut self, mode: u16) {
         let mode_write = TimerMode::from_bits_truncate(mode);
         self.mode.remove(TimerMode::Writable);
-        self.mode.insert(mode_write & TimerMode::Writable);
+        self.mode.insert(mode_write.intersection(TimerMode::Writable));
         if mode_write.contains(TimerMode::IRQ) {
             self.irq_latch = false;
         }
         self.mode.insert(TimerMode::IRQ);
         if mode_write.contains(TimerMode::SyncEnable) {
             if self.blank_timer {
-                match (self.mode & TimerMode::SyncMode).bits() >> 1 {
+                match (self.mode.intersection(TimerMode::SyncMode)).bits() >> 1 {
                     0b00 => self.pause = self.in_blank,
                     0b01 => self.pause = false,
                     0b10 => self.pause = !self.in_blank,
@@ -199,7 +199,7 @@ impl Timer {
                     _ => unreachable!()
                 }
             } else {
-                match (self.mode & TimerMode::SyncMode).bits() >> 1 {
+                match (self.mode.intersection(TimerMode::SyncMode)).bits() >> 1 {
                     0b00 | 0b11 => self.pause = true,
                     0b01 | 0b10 => self.pause = false,
                     _ => unreachable!()
@@ -213,14 +213,14 @@ impl Timer {
 
     fn read_mode(&mut self) -> u16 {
         let mode = self.mode.bits();
-        self.mode.remove(TimerMode::ReachedMax | TimerMode::ReachedTarget);
+        self.mode.remove(TimerMode::ReachedMax.union(TimerMode::ReachedTarget));
         mode
     }
 
     fn blank_begin(&mut self) {
         self.in_blank = true;
         if self.mode.contains(TimerMode::SyncEnable) {
-            match (self.mode & TimerMode::SyncMode).bits() >> 1 {
+            match (self.mode.intersection(TimerMode::SyncMode)).bits() >> 1 {
                 0b00 => self.pause = true,
                 0b01 => self.counter = 0,
                 0b10 => {
@@ -236,7 +236,7 @@ impl Timer {
     fn blank_end(&mut self) {
         self.in_blank = false;
         if self.mode.contains(TimerMode::SyncEnable) {
-            match (self.mode & TimerMode::SyncMode).bits() >> 1 {
+            match (self.mode.intersection(TimerMode::SyncMode)).bits() >> 1 {
                 0b00 => self.pause = false,
                 0b01 => (),
                 0b10 => self.pause = true,
@@ -247,11 +247,11 @@ impl Timer {
     }
 
     fn use_sys_clock(&self) -> bool {
-        let src = (self.mode & TimerMode::ClockSrc).bits() >> 8;
+        let src = (self.mode.intersection(TimerMode::ClockSrc)).bits() >> 8;
         if self.blank_timer {
-            (src & 0b1) == 0
+            !test_bit!(src, 0)
         } else {
-            (src & 0b10) == 0
+            !test_bit!(src, 1)
         }
     }
 

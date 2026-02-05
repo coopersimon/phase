@@ -172,7 +172,7 @@ impl SystemCoproc {
 
     fn set_cause(&mut self, data: u32) {
         self.exception_cause.remove(ExceptionCause::Writable);
-        let writable = ExceptionCause::from_bits_truncate(data) & ExceptionCause::Writable;
+        let writable = ExceptionCause::from_bits_truncate(data).intersection(ExceptionCause::Writable);
         self.exception_cause.insert(writable);
     }
 
@@ -181,14 +181,14 @@ impl SystemCoproc {
     }
 
     fn push_int_stack(&mut self) {
-        let stack = self.system_status & SystemStatus::IntStackTop;
+        let stack = self.system_status.intersection(SystemStatus::IntStackTop);
         // Write 0 to stack: i.e. switch to kernel mode + disable interrupts.
-        self.system_status.remove(SystemStatus::IntStackBottom | SystemStatus::IntStackTop);
+        self.system_status.remove(SystemStatus::IntStackBottom.union(SystemStatus::IntStackTop));
         self.system_status.insert(SystemStatus::from_bits_truncate(stack.bits() << 2));
     }
 
     fn pop_int_stack(&mut self) {
-        let stack = self.system_status & SystemStatus::IntStackBottom;
+        let stack = self.system_status.intersection(SystemStatus::IntStackBottom);
         self.system_status.remove(SystemStatus::IntStackTop);
         self.system_status.insert(SystemStatus::from_bits_truncate(stack.bits() >> 2));
     }
@@ -196,8 +196,8 @@ impl SystemCoproc {
     /// Check if an interrupt has triggered.
     fn check_interrupt(&self) -> bool {
         if self.system_status.contains(SystemStatus::CurrentIntEnable) {
-            let mask = (self.system_status & SystemStatus::InterruptMask).bits();
-            let irq = (self.exception_cause & ExceptionCause::InterruptPending).bits();
+            let mask = (self.system_status.intersection(SystemStatus::InterruptMask)).bits();
+            let irq = (self.exception_cause.intersection(ExceptionCause::InterruptPending)).bits();
             mask & irq != 0
         } else {
             false

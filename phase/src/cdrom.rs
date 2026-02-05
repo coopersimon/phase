@@ -301,11 +301,11 @@ impl CDROM {
 
     fn write_status(&mut self, data: u8) {
         self.status.remove(Status::PortIndex);
-        self.status.insert(Status::from_bits_truncate(data) & Status::PortIndex);
+        self.status.insert(Status::from_bits_truncate(data).intersection(Status::PortIndex));
     }
 
     fn index(&self) -> u8 {
-        (self.status & Status::PortIndex).bits()
+        (self.status.intersection(Status::PortIndex)).bits()
     }
 
     fn write_command(&mut self, data: u8) {
@@ -812,6 +812,7 @@ impl CDROM {
 
     /// Read table of contents
     fn read_toc(&mut self) -> DriveResult<()> {
+        unimplemented!("TOC");
         // TODO: .cue file?
         match self.response_count {
             0 => {

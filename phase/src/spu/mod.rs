@@ -67,7 +67,7 @@ impl SPU {
             self.transfer_from_fifo();
         }
 
-        if self.control.contains(SPUControl::Enable | SPUControl::IRQEnable) &&
+        if self.control.contains(SPUControl::Enable.union(SPUControl::IRQEnable)) &&
             self.status.contains(SPUStatus::IRQ) {
             Interrupt::SPU
         } else {
@@ -202,19 +202,19 @@ impl SPU {
         }
         // Set mode bits.
         self.status.remove(SPUStatus::SPUMode);
-        let new_mode = (self.control & SPUControl::SPUMode).bits();
+        let new_mode = (self.control.intersection(SPUControl::SPUMode)).bits();
         self.status.insert(SPUStatus::from_bits_truncate(new_mode));
         // Set DMA mode.
         self.status.remove(SPUStatus::DMABits);
         self.transfer_fifo = false;
-        match (self.control & SPUControl::SoundRAMTransfer).bits() >> 4 {
+        match self.control.intersection(SPUControl::SoundRAMTransfer).bits() >> 4 {
             0b00 => {}, // Stop
             0b01 => {   // Manual
                 self.transfer_fifo = true;
                 self.status.insert(SPUStatus::TransferBusy);
             },
-            0b10 => self.status.insert(SPUStatus::DMAWriteReq | SPUStatus::DMATransferReq),
-            0b11 => self.status.insert(SPUStatus::DMAReadReq | SPUStatus::DMATransferReq),
+            0b10 => self.status.insert(SPUStatus::DMAWriteReq.union(SPUStatus::DMATransferReq)),
+            0b11 => self.status.insert(SPUStatus::DMAReadReq.union(SPUStatus::DMATransferReq)),
             _ => unreachable!()
         }
     }
