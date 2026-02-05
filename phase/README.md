@@ -8,7 +8,7 @@ Below is a list of selected games and their status.
 
 - Castlevania: Symphony of the Night: If left for a long time, plays Konami title then locks up.
 - Crash Bandicoot: Boots, everything with negative X coords looks broken.
-- Crash Bandicoot 2: Crashes trying to draw line
+- Crash Bandicoot 2: Boots, startup looks kinda ok, a bit choppy FPS, some lighting issues
 - Crash Bandicoot 3: Peripheral error (multitap?)
 - Crash Team Racing: Locks up after displaying (broken) title screen
 - Dragon Warrior 7: Shows intro title video then locks up
@@ -21,11 +21,11 @@ Below is a list of selected games and their status.
 - Metal Gear Solid: Waiting for SPU interrupt? Shows a few titles then locks up.
 - Resident Evil: Write VRAM block out of bounds (might require wrapping)
 - Resident Evil 2: Displays titles then video, then black screen and lockup
-- Suikoden: Displays video then crashes due to draw line.
+- Suikoden: Displays video then doesn't want to continue due to memcard issues.
 - Tekken 3: Displays a title then crashes due to VRAM overflow.
 - Tony Hawk's Pro Skater 2: Shows some video then locks up (copy protection?)
 - Vagrant Story: Shows intro video with some glitches, then freezes on broken title screen
-- Wild ARMS: Titles, displays video, menu looks OK, then line drawing crash.
+- Wild ARMS: Titles, displays video, menu looks OK, then hangs and crashes
 
 ## TODO list
 

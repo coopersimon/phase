@@ -268,6 +268,65 @@ impl RendererImpl for SoftwareRenderer {
             current_tex_coord.s = tex_coord.s;
         }
     }
+
+    fn draw_line(&mut self, vertex_a: &Vertex, vertex_b: &Vertex, transparent: bool) {
+        // X or Y major line:
+        let dx = (vertex_a.coord.x - vertex_b.coord.x).abs();
+        let dy = (vertex_a.coord.y - vertex_b.coord.y).abs();
+        if dx > dy {
+            let (left, right) = if vertex_a.coord.x < vertex_b.coord.x {
+                (vertex_a, vertex_b)
+            } else {
+                (vertex_b, vertex_a)
+            };
+            let mut color = InterpolatedColor::from_x_major(left, right);
+            let y_step = if left.coord.y < right.coord.y {1} else {-1};
+            let x_begin = left.coord.x + self.draw_offset.x;
+            let x_end = (right.coord.x + self.draw_offset.x).min(self.drawing_area.right - 1);
+            let mut y = left.coord.y + self.draw_offset.y;
+            let mut delta = 2 * dy - dx;
+            for x in x_begin..=x_end {
+                if x >= self.drawing_area.left &&
+                    y >= self.drawing_area.top && y < self.drawing_area.bottom {
+                    let addr = (y as usize) * 1024 + (x as usize);
+                    self.write_pixel(addr, &color.get(), transparent);
+                }
+                if delta > 0 {
+                    y += y_step;
+                    delta += 2 * (dy - dx);
+                } else {
+                    delta += 2 * dy;
+                }
+                color.inc();
+            }
+        } else {
+            let (top, bottom) = if vertex_a.coord.y < vertex_b.coord.y {
+                (vertex_a, vertex_b)
+            } else {
+                (vertex_b, vertex_a)
+            };
+            let mut color = InterpolatedColor::from_y_major(top, bottom);
+            let x_step = if top.coord.x < bottom.coord.x {1} else {-1};
+            let y_begin = top.coord.y + self.draw_offset.y;
+            let y_end = (bottom.coord.y + self.draw_offset.y).min(self.drawing_area.bottom - 1);
+            let mut x = top.coord.x + self.draw_offset.x;
+            let mut delta = 2 * dx - dy;
+            for y in y_begin..=y_end {
+                if y >= self.drawing_area.top &&
+                    x >= self.drawing_area.left && x < self.drawing_area.right {
+                    let addr = (y as usize) * 1024 + (x as usize);
+                    self.write_pixel(addr, &color.get(), transparent);
+                }
+                if delta > 0 {
+                    x += x_step;
+                    delta += 2 * (dx - dy);
+                } else {
+                    delta += 2 * dx;
+                }
+                color.inc();
+            }
+        }
+    }
 }
 
 // Internal
@@ -550,4 +609,46 @@ struct Lines {
     left: Line,
     right: Line,
     max_y: i16,
+}
+
+struct InterpolatedColor {
+    r: InterpolatedValue,
+    g: InterpolatedValue,
+    b: InterpolatedValue,
+}
+
+impl InterpolatedColor {
+    fn from_x_major(left: &Vertex, right: &Vertex) -> Self {
+        let gradient = (1_i32 << 16).checked_div((right.coord.x - left.coord.x) as i32).unwrap_or(0);
+        Self {
+            r: InterpolatedValue::new(gradient, left.col.r.into(), right.col.r.into(), 0),
+            g: InterpolatedValue::new(gradient, left.col.g.into(), right.col.g.into(), 0),
+            b: InterpolatedValue::new(gradient, left.col.b.into(), right.col.b.into(), 0),
+        }
+    }
+
+    fn from_y_major(top: &Vertex, bottom: &Vertex) -> Self {
+        let gradient = (1_i32 << 16).checked_div((bottom.coord.y - top.coord.y) as i32).unwrap_or(0);
+        Self {
+            r: InterpolatedValue::new(gradient, top.col.r.into(), bottom.col.r.into(), 0),
+            g: InterpolatedValue::new(gradient, top.col.g.into(), bottom.col.g.into(), 0),
+            b: InterpolatedValue::new(gradient, top.col.b.into(), bottom.col.b.into(), 0),
+        }
+    }
+
+    fn get(&self) -> Color {
+        Color {
+            r: ((self.r.val + 0x8000) >> 16) as u8,
+            g: ((self.g.val + 0x8000) >> 16) as u8,
+            b: ((self.b.val + 0x8000) >> 16) as u8,
+            mask: 0,
+        }
+    }
+
+    /// Advance internal state.
+    fn inc(&mut self) {
+        self.r.inc();
+        self.g.inc();
+        self.b.inc();
+    }
 }

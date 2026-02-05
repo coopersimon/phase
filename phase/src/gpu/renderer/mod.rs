@@ -469,37 +469,47 @@ impl Renderer {
     fn draw_line(&mut self, rgb: u32, transparent: bool) {
         let vertex_1 = self.get_parameter();
         let vertex_2 = self.get_parameter();
-        unimplemented!("draw line");
+        let vertex_a = Vertex::from_xy(vertex_1).set_col(rgb);
+        let vertex_b = Vertex::from_xy(vertex_2).set_col(rgb);
+        self.renderer.draw_line(&vertex_a, &vertex_b, transparent);
     }
 
     fn draw_poly_line(&mut self, rgb: u32, transparent: bool) {
         let vertex_1 = self.get_parameter();
+        let mut vertex_a = Vertex::from_xy(vertex_1).set_col(rgb);
         loop {
             let vertex_n = self.get_parameter();
             if vertex_n == POLY_LINE_TERM {
                 break;
             }
+            let vertex_b = Vertex::from_xy(vertex_n).set_col(rgb);
+            self.renderer.draw_line(&vertex_a, &vertex_b, transparent);
+            vertex_a = vertex_b.clone();
         }
-        unimplemented!("draw poly line");
     }
 
     fn draw_shaded_line(&mut self, rgb_1: u32, transparent: bool) {
         let vertex_1 = self.get_parameter();
         let rgb_2 = self.get_parameter();
         let vertex_2 = self.get_parameter();
-        unimplemented!("draw shaded line");
+        let vertex_a = Vertex::from_xy(vertex_1).set_col(rgb_1);
+        let vertex_b = Vertex::from_xy(vertex_2).set_col(rgb_2);
+        self.renderer.draw_line(&vertex_a, &vertex_b, transparent);
     }
 
     fn draw_shaded_poly_line(&mut self, rgb_1: u32, transparent: bool) {
         let vertex_1 = self.get_parameter();
+        let mut vertex_a = Vertex::from_xy(vertex_1).set_col(rgb_1);
         loop {
             let rgb_n = self.get_parameter();
             if rgb_n == POLY_LINE_TERM {
                 break;
             }
             let vertex_n = self.get_parameter();
+            let vertex_b = Vertex::from_xy(vertex_n).set_col(rgb_n);
+            self.renderer.draw_line(&vertex_a, &vertex_b, transparent);
+            vertex_a = vertex_b.clone();
         }
-        unimplemented!("draw shaded poly line");
     }
 
     fn draw_rectangle(&mut self, rgb: u32, transparent: bool) {
@@ -685,7 +695,7 @@ bitflags::bitflags! {
 
 impl GPUStatus {
     pub fn h_res(&self) -> usize {
-        match (*self & GPUStatus::XResolution).bits() >> 16 {
+        match (self.intersection(GPUStatus::XResolution)).bits() >> 16 {
             0b000 => 256,
             0b010 => 320,
             0b100 => 512,
@@ -695,8 +705,8 @@ impl GPUStatus {
     }
 
     pub fn v_res(&self) -> usize {
-        let interlace_bits = GPUStatus::YResolution | GPUStatus::Interlace;
-        if self.contains(interlace_bits) {
+        const INTERLACE_BITS: GPUStatus = GPUStatus::YResolution.union(GPUStatus::Interlace);
+        if self.contains(INTERLACE_BITS) {
             480
         } else {
             240
@@ -714,11 +724,11 @@ impl GPUStatus {
 
     pub fn set_vram_send(&mut self) {
         // Assuming that whenever this is set, we are in DMAMode == 0b11
-        self.insert(GPUStatus::VRAMSendReady | GPUStatus::DMARequest);
+        self.insert(GPUStatus::VRAMSendReady.union(GPUStatus::DMARequest));
     }
 
     pub fn clear_vram_send(&mut self) {
-        self.remove(GPUStatus::VRAMSendReady | GPUStatus::DMARequest);
+        self.remove(GPUStatus::VRAMSendReady.union(GPUStatus::DMARequest));
     }
 }
 
@@ -751,8 +761,10 @@ trait RendererImpl {
     fn draw_triangle_tex(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool);
     fn draw_rectangle(&mut self, color: Color, top_left: Coord, size: Size, transparent: bool);
     fn draw_rectangle_tex(&mut self, color: Color, tex_coord: TexCoord, tex_info: &TexInfo, top_left: Coord, size: Size, transparent: bool);
+    fn draw_line(&mut self, vertex_a: &Vertex, vertex_b: &Vertex, transparent: bool);
 }
 
+#[derive(Clone, Copy)]
 struct Coord {
     x: i16,
     y: i16,
@@ -773,6 +785,7 @@ impl Coord {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Size {
     width: u16,
     height: u16,
@@ -872,6 +885,7 @@ impl TexCoord {
     }
 }
 
+#[derive(Clone)]
 struct Vertex {
     coord: Coord,
     col: Color,
