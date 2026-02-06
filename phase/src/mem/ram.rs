@@ -13,6 +13,12 @@ impl RAM {
 }
 
 impl RAM {
+    pub fn get_byte_slice<'a>(&'a self, addr: u32, len: usize) -> &'a [u8] {
+        let start = addr as usize;
+        let end = start + len;
+        &self.data[start..end]
+    }
+
     pub fn read_byte(&self, addr: u32) -> u8 {
         self.data[addr as usize]
     }

@@ -1,10 +1,15 @@
 mod voice;
 pub mod resampler;
+mod adpcm;
+mod adsr;
+mod sweep;
 
 use std::collections::VecDeque;
 
 use crossbeam_channel::Sender;
-use dasp::frame::Stereo;
+use dasp::frame::{
+    Frame, Stereo
+};
 use mips::mem::Data;
 
 use crate::{
@@ -14,13 +19,8 @@ use crate::{
 };
 
 use voice::Voice;
+use sweep::SweepVolume;
 use resampler::*;
-
-#[derive(Default)]
-struct StereoVolume {
-    left: u16,
-    right: u16,
-}
 
 const SPU_RAM_SIZE: usize = 512 * 1024;
 const SPU_FIFO_SIZE: usize = 32;
@@ -54,7 +54,7 @@ pub struct SPU {
     ram_irq_addr:   u16,
     ram_ctrl:       u16,
 
-    main_vol:       StereoVolume,
+    main_vol:       SweepVolume,
     cd_input_vol:   StereoVolume,
     ext_input_vol:  StereoVolume,
     reverb_vol:     StereoVolume,
@@ -110,11 +110,6 @@ impl SPU {
             self.transfer_from_fifo();
         }
 
-        // TODO: is this a bit intensive..?
-        for voice in self.voices.iter_mut() {
-            voice.clock(cycles);
-        }
-
         self.cycle_count += cycles;
         if self.cycle_count > CYCLES_PER_SAMPLE {
             self.cycle_count -= CYCLES_PER_SAMPLE;
@@ -154,32 +149,32 @@ impl MemInterface for SPU {
                 let voice_idx = (addr >> 4) & 0x1F;
                 self.voices[voice_idx as usize].read_halfword(addr & 0xF)
             },
-            0x1F80_1D80 => self.main_vol.left,
-            0x1F80_1D82 => self.main_vol.right,
-            0x1F80_1D84 => self.reverb_vol.left,
-            0x1F80_1D86 => self.reverb_vol.right,
-            0x1F80_1D88 => 0, // TODO:KON flags
-            0x1F80_1D8A => 0, // TODO:KON flags
-            0x1F80_1D8C => 0, // TODO:KOFF flags
-            0x1F80_1D8E => 0, // TODO:KOFF flags
-            0x1F80_1D90 => 0, // TODO:PMOD flags
-            0x1F80_1D92 => 0, // TODO:PMOD flags
-            0x1F80_1D94 => 0, // TODO:Noise flags
-            0x1F80_1D96 => 0, // TODO:Noise flags
+            0x1F80_1D80 => self.main_vol.left as u16,
+            0x1F80_1D82 => self.main_vol.right as u16,
+            0x1F80_1D84 => self.reverb_vol.left as u16,
+            0x1F80_1D86 => self.reverb_vol.right as u16,
+            0x1F80_1D88 => 0, // KON
+            0x1F80_1D8A => 0, // KON
+            0x1F80_1D8C => 0, // KOFF
+            0x1F80_1D8E => 0, // KOFF
+            0x1F80_1D90 => self.get_pitch_mod_lo(),
+            0x1F80_1D92 => self.get_pitch_mod_hi(),
+            0x1F80_1D94 => self.get_noise_lo(),
+            0x1F80_1D96 => self.get_noise_hi(),
             0x1F80_1D98 => 0, // TODO:Echo flags
             0x1F80_1D9A => 0, // TODO:Echo flags
-            0x1F80_1D9C => 0, // TODO:ENDX flags
-            0x1F80_1D9E => 0, // TODO:ENDX flags
+            0x1F80_1D9C => self.get_endx_lo(),
+            0x1F80_1D9E => self.get_endx_hi(),
             0x1F80_1DA2 => 0, // TODO: reverb base
             0x1F80_1DA4 => self.ram_irq_addr,
             0x1F80_1DA6 => self.ram_addr,
             0x1F80_1DAA => self.control.bits(),
             0x1F80_1DAC => self.ram_ctrl,
             0x1F80_1DAE => self.status.bits(),
-            0x1F80_1DB0 => self.cd_input_vol.left,
-            0x1F80_1DB2 => self.cd_input_vol.right,
-            0x1F80_1DB4 => self.ext_input_vol.left,
-            0x1F80_1DB6 => self.ext_input_vol.right,
+            0x1F80_1DB0 => self.cd_input_vol.left as u16,
+            0x1F80_1DB2 => self.cd_input_vol.right as u16,
+            0x1F80_1DB4 => self.ext_input_vol.left as u16,
+            0x1F80_1DB6 => self.ext_input_vol.right as u16,
             0x1F80_1DB8 => 0, // TODO: current main volume.
             0x1F80_1DBA => 0, // TODO: current main volume.
             0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
@@ -195,22 +190,22 @@ impl MemInterface for SPU {
                 let voice_idx = (addr >> 4) & 0x1F;
                 self.voices[voice_idx as usize].write_halfword(addr & 0xF, data);
             },
-            0x1F80_1D80 => self.main_vol.left = data,
-            0x1F80_1D82 => self.main_vol.right = data,
-            0x1F80_1D84 => self.reverb_vol.left = data,
-            0x1F80_1D86 => self.reverb_vol.right = data,
-            0x1F80_1D88 => {}, // TODO:KON flags
-            0x1F80_1D8A => {}, // TODO:KON flags
-            0x1F80_1D8C => {}, // TODO:KOFF flags
-            0x1F80_1D8E => {}, // TODO:KOFF flags
-            0x1F80_1D90 => {}, // TODO:PMOD flags
-            0x1F80_1D92 => {}, // TODO:PMOD flags
-            0x1F80_1D94 => {}, // TODO:Noise flags
-            0x1F80_1D96 => {}, // TODO:Noise flags
+            0x1F80_1D80 => self.main_vol.set_left(data),
+            0x1F80_1D82 => self.main_vol.set_right(data),
+            0x1F80_1D84 => self.reverb_vol.left = data as i16,
+            0x1F80_1D86 => self.reverb_vol.right = data as i16,
+            0x1F80_1D88 => self.set_key_on_lo(data),
+            0x1F80_1D8A => self.set_key_on_hi(data),
+            0x1F80_1D8C => self.set_key_off_lo(data),
+            0x1F80_1D8E => self.set_key_off_hi(data),
+            0x1F80_1D90 => self.set_pitch_mod_lo(data),
+            0x1F80_1D92 => self.set_pitch_mod_hi(data),
+            0x1F80_1D94 => self.set_noise_lo(data),
+            0x1F80_1D96 => self.set_noise_hi(data),
             0x1F80_1D98 => {}, // TODO:Echo flags
             0x1F80_1D9A => {}, // TODO:Echo flags
-            0x1F80_1D9C => {}, // TODO:ENDX flags
-            0x1F80_1D9E => {}, // TODO:ENDX flags
+            0x1F80_1D9C => {}, // ENDX
+            0x1F80_1D9E => {}, // ENDX
             0x1F80_1DA2 => {}, // TODO: reverb base
             0x1F80_1DA4 => self.ram_irq_addr = data,
             0x1F80_1DA6 => {
@@ -220,10 +215,10 @@ impl MemInterface for SPU {
             0x1F80_1DA8 => self.write_fifo(data),
             0x1F80_1DAA => self.set_control(data),
             0x1F80_1DAC => self.ram_ctrl = data,
-            0x1F80_1DB0 => self.cd_input_vol.left = data,
-            0x1F80_1DB2 => self.cd_input_vol.right = data,
-            0x1F80_1DB4 => self.ext_input_vol.left = data,
-            0x1F80_1DB6 => self.ext_input_vol.right = data,
+            0x1F80_1DB0 => self.cd_input_vol.left = data as i16,
+            0x1F80_1DB2 => self.cd_input_vol.right = data as i16,
+            0x1F80_1DB4 => self.ext_input_vol.left = data as i16,
+            0x1F80_1DB6 => self.ext_input_vol.right = data as i16,
             0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
                 
             },
@@ -308,20 +303,140 @@ impl SPU {
         }
     }
 
+    fn set_key_on_lo(&mut self, data: u16) {
+        for i in 0..16 {
+            if test_bit!(data, i) {
+                self.voices[i].key_on();
+            }
+        }
+    }
+
+    fn set_key_on_hi(&mut self, data: u16) {
+        for i in 0..8 {
+            if test_bit!(data, i) {
+                self.voices[16 + i].key_on();
+            }
+        }
+    }
+
+    fn set_key_off_lo(&mut self, data: u16) {
+        for i in 0..16 {
+            if test_bit!(data, i) {
+                self.voices[i].key_off();
+            }
+        }
+    }
+
+    fn set_key_off_hi(&mut self, data: u16) {
+        for i in 0..8 {
+            if test_bit!(data, i) {
+                self.voices[16 + i].key_off();
+            }
+        }
+    }
+
+    fn get_endx_lo(&self) -> u16 {
+        let mut endx = 0;
+        for i in 0..16 {
+            endx |= if self.voices[i].get_endx() {1 << i} else {0};
+        }
+        endx
+    }
+
+    fn get_endx_hi(&self) -> u16 {
+        let mut endx = 0;
+        for i in 0..8 {
+            endx |= if self.voices[16 + i].get_endx() {1 << i} else {0};
+        }
+        endx
+    }
+
+    fn set_pitch_mod_lo(&mut self, data: u16) {
+        for i in 0..16 {
+            self.voices[i].set_pitch_mod(test_bit!(data, i));
+        }
+    }
+
+    fn set_pitch_mod_hi(&mut self, data: u16) {
+        for i in 0..8 {
+            self.voices[16 + i].set_pitch_mod(test_bit!(data, i));
+        }
+    }
+
+    fn get_pitch_mod_lo(&self) -> u16 {
+        let mut pmod = 0;
+        for i in 0..16 {
+            pmod |= if self.voices[i].get_pitch_mod() {1 << i} else {0};
+        }
+        pmod
+    }
+
+    fn get_pitch_mod_hi(&self) -> u16 {
+        let mut pmod = 0;
+        for i in 0..8 {
+            pmod |= if self.voices[16 + i].get_pitch_mod() {1 << i} else {0};
+        }
+        pmod
+    }
+
+    fn set_noise_lo(&mut self, data: u16) {
+        for i in 0..16 {
+            self.voices[i].set_noise(test_bit!(data, i));
+        }
+    }
+
+    fn set_noise_hi(&mut self, data: u16) {
+        for i in 0..8 {
+            self.voices[16 + i].set_noise(test_bit!(data, i));
+        }
+    }
+
+    fn get_noise_lo(&self) -> u16 {
+        let mut noise = 0;
+        for i in 0..16 {
+            noise |= if self.voices[i].get_noise() {1 << i} else {0};
+        }
+        noise
+    }
+
+    fn get_noise_hi(&self) -> u16 {
+        let mut noise = 0;
+        for i in 0..8 {
+            noise |= if self.voices[16 + i].get_noise() {1 << i} else {0};
+        }
+        noise
+    }
+
     fn generate_sample(&mut self) -> Stereo<f32> {
         if !self.control.contains(SPUControl::Enable) {
-            return [0.0, 0.0];
+            return Stereo::EQUILIBRIUM;
         }
 
         let irq_addr = (self.ram_irq_addr as u32) * 8;
         let mut output = (0, 0);
-        for voice in self.voices.iter() {
-            let voice_out = voice.get_sample(&self.ram, irq_addr);
-            output.0 += voice_out.0;
-            output.1 += voice_out.1;
+        let mut prev_voice_vol = 0;
+        for voice in self.voices.iter_mut() {
+            let (voice_out, irq) = voice.clock(&self.ram, irq_addr, prev_voice_vol);
+            if voice.get_pitch_mod() {
+                prev_voice_vol = voice.get_adsr_vol();
+            } else {
+                output.0 += voice_out.0;
+                output.1 += voice_out.1;
+                prev_voice_vol = 0;
+            }
+            if irq {
+                // TODO
+            }
         }
 
-        [0.0, 0.0]
+        if !self.control.contains(SPUControl::Mute) {
+            Stereo::EQUILIBRIUM
+        } else {
+            let main_vol = self.main_vol.get_vol();
+            let left = ((output.0.clamp(i16::MIN as i32, i16::MAX as i32)) * (main_vol.left as i32)) >> 15;
+            let right = ((output.1.clamp(i16::MIN as i32, i16::MAX as i32)) * (main_vol.right as i32)) >> 15;
+            [left as f32 / (32768.0), right as f32 / (32768.0)]
+        }
     }
 }
 
@@ -357,4 +472,10 @@ bitflags::bitflags! {
 
         const DMABits           = bits![7, 8, 9];
     }
+}
+
+#[derive(Default)]
+struct StereoVolume {
+    pub left: i16,
+    pub right: i16,
 }
