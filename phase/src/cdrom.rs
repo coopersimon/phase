@@ -419,7 +419,6 @@ impl CDROM {
         let start_pos = self.seek_file_offset - self.buffer_file_offset;
         self.current_sector_header = SectorHeader::from_slice(&self.buffer[(start_pos + SECTOR_SYNC_BYTES) as usize..]);
         let trigger_int_1 = if self.send_xa_adpcm_sector() {
-            // TODO: actually process this...
             false
         } else {
             // Send as data.
@@ -446,16 +445,18 @@ impl CDROM {
     fn send_xa_adpcm_sector(&mut self) -> bool {
         if self.mode.contains(DriveMode::XAADPCM) {
             //println!("try XA-ADPCM: {:X} {:X} {:X} {:X}", self.current_sector_header.file, self.current_sector_header.channel, self.current_sector_header.submode.bits(), self.current_sector_header.coding);
-            if self.mode.contains(DriveMode::XAFilter) {
-                if self.current_sector_header.file != self.file_filter ||
-                    self.current_sector_header.channel != self.channel_filter {
-                    return false;
-                }
-            }
             if !self.current_sector_header.submode.contains(CDSectorSubmode::Audio | CDSectorSubmode::RealTime) {
                 return false;
             }
             self.status.insert(Status::ADPBusy);
+            if self.mode.contains(DriveMode::XAFilter) {
+                if self.current_sector_header.file != self.file_filter ||
+                    self.current_sector_header.channel != self.channel_filter {
+                    // Skip this sector.
+                    return true;
+                }
+            }
+            // TODO: send to SPU.
             true
         } else {
             false
@@ -746,6 +747,7 @@ impl CDROM {
     fn seek_l(&mut self) -> DriveResult<()> {
         match self.response_count {
             0 => {
+                self.read_data_counter = 0;
                 self.drive_status.remove(DriveStatus::ReadBits);
                 self.drive_status.insert(DriveStatus::Seeking);
                 self.drive_status.insert(DriveStatus::SpindleMotor);
@@ -857,12 +859,12 @@ impl CDROM {
         // TODO: verify this.
         self.send_response(0x01, 3); // Track number
         self.send_response(0x01, 3); // Index number
-        self.send_response(0x00, 3); // Minute number
-        self.send_response(0x00, 3); // Second number
-        self.send_response(0x00, 3); // Sector number
-        self.send_response(0x00, 3); // Minute number
-        self.send_response(0x00, 3); // Second number
-        self.send_response(0x00, 3); // Sector number
+        self.send_response(self.current_sector_header.minute, 3); // Minute number
+        self.send_response(self.current_sector_header.second, 3); // Second number
+        self.send_response(self.current_sector_header.sector, 3); // Sector number
+        self.send_response(self.current_sector_header.minute, 3); // Minute number
+        self.send_response(self.current_sector_header.second, 3); // Second number
+        self.send_response(self.current_sector_header.sector, 3); // Sector number
         self.command_complete()
     }
 

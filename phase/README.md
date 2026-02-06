@@ -26,7 +26,7 @@ Below is a list of selected games and their status.
 - Tekken 3: Issue with peripheral interface
 - Tony Hawk's Pro Skater 2: Shows some video then locks up (copy protection?) (got a bit further than before?)
 - Vagrant Story: Titles and pre-video OK, title is broken, intro video issues, gameplay has glitches at left+bottom of screen
-- Wild ARMS: Titles, displays video, menu looks OK, then hangs and crashes
+- Wild ARMS: Mostly ok!
 
 ## TODO list
 
