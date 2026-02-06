@@ -120,11 +120,6 @@ impl DMADevice for GPU {
             0
         };*/
         let data = self.vram_rx.recv().unwrap_or_default();
-        if self.vram_rx.is_empty() {
-            let mut status = GPUStatus::from_bits_truncate(self.status.load(Ordering::Acquire));
-            status.clear_vram_send();
-            self.status.store(status.bits(), Ordering::Release);
-        }
         //println!("got {:X}", data);
         Data { data: data, cycles: 1 }
     }
@@ -189,6 +184,9 @@ impl GPU {
             if self.state.get_interlace_bit() {
                 status |= GPUStatus::InterlaceOdd.bits();
             }
+        }
+        if !self.vram_rx.is_empty() {
+            status |= GPUStatus::VRAMSendReady.bits();
         }
         status
     }

@@ -562,15 +562,15 @@ impl Renderer {
         let size = Size::from_xy(self.get_parameter());
         let data_words = size.word_count();
         self.staging_buffer.clear();
-        self.status.set_dma_recv();
-        self.update_status();
+        //self.status.set_dma_recv();
+        //self.update_status();
         for _ in 0..data_words {
             let data = self.get_parameter();
             self.staging_buffer.push((data & 0xFFFF) as u16);
             self.staging_buffer.push(((data >> 16) & 0xFFFF) as u16);
         }
-        self.status.clear_dma_recv();
-        self.update_status();
+        //self.status.clear_dma_recv();
+        //self.update_status();
         self.renderer.write_vram_block(&self.staging_buffer, dest, size);
     }
 
@@ -580,8 +580,8 @@ impl Renderer {
         let data_words = size.word_count() as usize;
         self.staging_buffer.resize(data_words * 2, 0);
         self.renderer.read_vram_block(&mut self.staging_buffer, source, size);
-        self.status.set_vram_send();
-        self.update_status();
+        //self.status.set_vram_send();
+        //self.update_status();
         // Send.
         for i in 0..data_words {
             let idx = i * 2;
