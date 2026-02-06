@@ -1,3 +1,5 @@
+mod voice;
+
 use std::collections::VecDeque;
 
 use mips::mem::Data;
@@ -7,6 +9,8 @@ use crate::{
     mem::{DMADevice, ram::RAM},
     utils::{bits::*, interface::MemInterface}
 };
+
+use voice::Voice;
 
 #[derive(Default)]
 struct Stereo {
@@ -33,6 +37,7 @@ pub struct SPU {
     main_vol: Stereo,
     cd_input_vol: Stereo,
     ext_input_vol: Stereo,
+    reverb_vol: Stereo,
 
     control: SPUControl,
     status: SPUStatus,
@@ -54,6 +59,7 @@ impl SPU {
             main_vol: Default::default(),
             cd_input_vol: Default::default(),
             ext_input_vol: Default::default(),
+            reverb_vol: Default::default(),
 
             control: SPUControl::empty(),
             status: SPUStatus::empty(),
@@ -85,8 +91,8 @@ impl MemInterface for SPU {
             },
             0x1F80_1D80 => self.main_vol.left,
             0x1F80_1D82 => self.main_vol.right,
-            0x1F80_1D84 => 0, // TODO: reverb vol
-            0x1F80_1D86 => 0, // TODO: reverb vol
+            0x1F80_1D84 => self.reverb_vol.left,
+            0x1F80_1D86 => self.reverb_vol.right,
             0x1F80_1D88 => 0, // TODO:KON flags
             0x1F80_1D8A => 0, // TODO:KON flags
             0x1F80_1D8C => 0, // TODO:KOFF flags
@@ -126,8 +132,8 @@ impl MemInterface for SPU {
             },
             0x1F80_1D80 => self.main_vol.left = data,
             0x1F80_1D82 => self.main_vol.right = data,
-            0x1F80_1D84 => {}, // TODO: reverb vol
-            0x1F80_1D86 => {}, // TODO: reverb vol
+            0x1F80_1D84 => self.reverb_vol.left = data,
+            0x1F80_1D86 => self.reverb_vol.right = data,
             0x1F80_1D88 => {}, // TODO:KON flags
             0x1F80_1D8A => {}, // TODO:KON flags
             0x1F80_1D8C => {}, // TODO:KOFF flags
@@ -269,47 +275,5 @@ bitflags::bitflags! {
         const SPUMode           = bits![0, 1, 2, 3, 4, 5];
 
         const DMABits           = bits![7, 8, 9];
-    }
-}
-
-#[derive(Default)]
-struct Voice {
-    vol_left:       u16,    // 0
-    vol_right:      u16,    // 2
-    sample_rate:    u16,    // 4
-    start_addr:     u16,    // 6
-    adsr_lo:        u16,    // 8
-    adsr_hi:        u16,    // A
-    adsr_vol:       u16,    // C
-    repeat_addr:    u16,    // E
-}
-
-impl Voice {
-    fn read_halfword(&self, addr: u32) -> u16 {
-        match addr {
-            0x0 => self.vol_left,
-            0x2 => self.vol_right,
-            0x4 => self.sample_rate,
-            0x6 => self.start_addr,
-            0x8 => self.adsr_lo,
-            0xA => self.adsr_hi,
-            0xC => self.adsr_vol,
-            0xE => self.repeat_addr,
-            _ => unreachable!()
-        }
-    }
-
-    fn write_halfword(&mut self, addr: u32, data: u16) {
-        match addr {
-            0x0 => self.vol_left = data,
-            0x2 => self.vol_right = data,
-            0x4 => self.sample_rate = data,
-            0x6 => self.start_addr = data,
-            0x8 => self.adsr_lo = data,
-            0xA => self.adsr_hi = data,
-            0xC => self.adsr_vol = data,
-            0xE => self.repeat_addr = data,
-            _ => unreachable!()
-        }
     }
 }
