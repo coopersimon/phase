@@ -10,6 +10,7 @@ use winit::{
         EventLoop
     }, window::Window, keyboard::{PhysicalKey, KeyCode}
 };
+use cpal::traits::StreamTrait;
 
 use std::path::PathBuf;
 
@@ -27,6 +28,9 @@ struct Args {
 
     #[arg(short, long)]
     game: Option<String>,
+
+    #[arg(short, long)]
+    mute: bool,
 }
 
 fn main() {
@@ -41,15 +45,17 @@ fn main() {
     if args.debug {
         debug::debug_mode(playstation.make_debugger());
     } else {
-        run(playstation, game_disc);
+        run(playstation, game_disc, args.mute);
     }
 }
 
 /// Run playstation with visuals.
-fn run(playstation: PlayStation, game_disc: Option<PathBuf>) {
+fn run(mut playstation: PlayStation, game_disc: Option<PathBuf>, mute: bool) {
     let event_loop = EventLoop::new().expect("Failed to create event loop");
 
-    let mut app = App::new(playstation, game_disc);
+    let audio_stream = make_audio_stream(&mut playstation, mute);
+
+    let mut app = App::new(playstation, game_disc, audio_stream);
 
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
     event_loop.run_app(&mut app).unwrap();
@@ -91,11 +97,11 @@ struct App {
     frame:           Frame,
     last_frame_time: chrono::DateTime<chrono::Utc>,
 
-    //audio_stream: cpal::Stream
+    audio_stream: cpal::Stream
 }
 
 impl App {
-    fn new(console: PlayStation, game_disc: Option<PathBuf>/*, audio_stream: cpal::Stream*/) -> Self {
+    fn new(console: PlayStation, game_disc: Option<PathBuf>, audio_stream: cpal::Stream) -> Self {
         // Setup wgpu
         let instance = wgpu::Instance::new(&Default::default());
 
@@ -200,7 +206,7 @@ impl App {
             frame:           Frame::new(),
             last_frame_time: chrono::Utc::now(),
 
-            //audio_stream: audio_stream
+            audio_stream: audio_stream
         }
     }
 
@@ -272,7 +278,7 @@ impl ApplicationHandler for App {
         self.last_frame_time = chrono::Utc::now();
     
         // AUDIO
-        //self.audio_stream.play().expect("Couldn't start audio stream");
+        self.audio_stream.play().expect("Couldn't start audio stream");
 
         //let mut in_focus = true;
     }
@@ -381,3 +387,53 @@ impl ApplicationHandler for App {
     }
 }
 
+fn make_audio_stream(console: &mut PlayStation, mute: bool) -> cpal::Stream {
+    use cpal::traits::{
+        DeviceTrait,
+        HostTrait
+    };
+
+    let host = cpal::default_host();
+    let device = host.default_output_device().expect("no output device available.");
+
+    let config = pick_output_config(&device).with_max_sample_rate();
+    let sample_rate = config.sample_rate().0 as f64;
+    println!("Target audio sample rate {}", sample_rate);
+    let mut audio_handler = console.enable_audio(sample_rate).unwrap();
+
+    device.build_output_stream(
+        &config.into(),
+        move |data: &mut [f32], _| {
+            audio_handler.get_audio_packet(data);
+            if mute {
+                for d in data.iter_mut() {
+                    *d = 0.0;
+                }
+            }
+        },
+        move |err| {
+            println!("Error occurred: {}", err);
+        }
+    ).unwrap()
+}
+
+fn pick_output_config(device: &cpal::Device) -> cpal::SupportedStreamConfigRange {
+    use cpal::traits::DeviceTrait;
+
+    const MIN: u32 = 32_000;
+
+    let supported_configs_range = device.supported_output_configs()
+        .expect("error while querying configs");
+
+    for config in supported_configs_range {
+        let cpal::SampleRate(v) = config.max_sample_rate();
+        if v >= MIN {
+            return config;
+        }
+    }
+
+    device.supported_output_configs()
+        .expect("error while querying formats")
+        .next()
+        .expect("No supported config")
+}

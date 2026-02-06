@@ -4,7 +4,7 @@ mod internalmem;
 use mips::{coproc::EmptyCoproc, cpu::{MIPSCore, MIPSICore, mips1::{MIPSI, MIPSIInstruction}}, mem::{Data, Mem32}};
 use internalmem::InternalMem;
 use crate::{gte::GTE, io::BusIO};
-use crate::PlayStationConfig;
+use crate::{PlayStationConfig, AudioChannel};
 
 type MIPSCPU = MIPSI<InternalMem, EmptyCoproc, GTE, EmptyCoproc>;
 
@@ -24,6 +24,10 @@ impl CPU {
         Self {
             core
         }
+    }
+
+    pub fn enable_audio(&mut self) -> AudioChannel {
+        self.core.mut_mem().enable_audio()
     }
 
     /// Run the CPU. This will block until the end,

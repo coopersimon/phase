@@ -1,7 +1,10 @@
 mod voice;
+pub mod resampler;
 
 use std::collections::VecDeque;
 
+use crossbeam_channel::Sender;
+use dasp::frame::Stereo;
 use mips::mem::Data;
 
 use crate::{
@@ -11,9 +14,10 @@ use crate::{
 };
 
 use voice::Voice;
+use resampler::*;
 
 #[derive(Default)]
-struct Stereo {
+struct StereoVolume {
     left: u16,
     right: u16,
 }
@@ -21,64 +25,125 @@ struct Stereo {
 const SPU_RAM_SIZE: usize = 512 * 1024;
 const SPU_FIFO_SIZE: usize = 32;
 
+const CYCLES_PER_SAMPLE: usize = 0x300;
+const SAMPLE_PACKET_SIZE: usize = 32;
+
+/// Cycles per second.
+const CLOCK_RATE: usize = CYCLES_PER_SAMPLE * 44100;
+/// Emulated cycles per second.
+/// TODO: PAL (get these values from GPU)
+const REAL_CLOCK_RATE: f64 = 3413. * 263. * 60. * 7. / 11.;
+
+/// Base sample rate for audio.
+const BASE_SAMPLE_RATE: f64 = 44_100.0;
+
+const REAL_SAMPLE_RATE_RATIO: f64 = REAL_CLOCK_RATE / (CLOCK_RATE as f64);
+pub const REAL_BASE_SAMPLE_RATE: f64 = BASE_SAMPLE_RATE * REAL_SAMPLE_RATE_RATIO;
+
+
 /// Sound processing unit.
 pub struct SPU {
-    voices: [Voice; 24],
-    ram: RAM,
-    ram_full_addr: u32,
-    ram_fifo: VecDeque<u16>,
-    transfer_fifo: bool,
+    voices:         [Voice; 24],
+    ram:            RAM,
+    ram_full_addr:  u32,
+    ram_fifo:       VecDeque<u16>,
+    transfer_fifo:  bool,
 
     // Registers
-    ram_addr: u16,
-    ram_irq_addr: u16,
-    ram_ctrl: u16,
+    ram_addr:       u16,
+    ram_irq_addr:   u16,
+    ram_ctrl:       u16,
 
-    main_vol: Stereo,
-    cd_input_vol: Stereo,
-    ext_input_vol: Stereo,
-    reverb_vol: Stereo,
+    main_vol:       StereoVolume,
+    cd_input_vol:   StereoVolume,
+    ext_input_vol:  StereoVolume,
+    reverb_vol:     StereoVolume,
 
-    control: SPUControl,
-    status: SPUStatus,
+    control:    SPUControl,
+    status:     SPUStatus,
+
+    // Sample generation:
+    cycle_count: usize,
+
+    // Comms with audio thread
+    sample_buffer:      Vec<Stereo<f32>>,
+    sample_sender:      Option<Sender<SamplePacket>>,
 }
 
 impl SPU {
     pub fn new() -> Self{
         Self {
-            voices: Default::default(),
-            ram: RAM::new(SPU_RAM_SIZE),
-            ram_full_addr: 0,
-            ram_fifo: VecDeque::new(),
-            transfer_fifo: false,
+            voices:         Default::default(),
+            ram:            RAM::new(SPU_RAM_SIZE),
+            ram_full_addr:  0,
+            ram_fifo:       VecDeque::new(),
+            transfer_fifo:  false,
 
-            ram_addr: 0,
-            ram_irq_addr: 0,
-            ram_ctrl: 0,
+            ram_addr:       0,
+            ram_irq_addr:   0,
+            ram_ctrl:       0,
 
-            main_vol: Default::default(),
-            cd_input_vol: Default::default(),
-            ext_input_vol: Default::default(),
-            reverb_vol: Default::default(),
+            main_vol:       Default::default(),
+            cd_input_vol:   Default::default(),
+            ext_input_vol:  Default::default(),
+            reverb_vol:     Default::default(),
 
-            control: SPUControl::empty(),
-            status: SPUStatus::empty(),
+            control:    SPUControl::empty(),
+            status:     SPUStatus::empty(),
+
+            cycle_count: 0,
+
+            sample_buffer:  Vec::new(),
+            sample_sender:  None,
         }
     }
 
-    pub fn clock(&mut self, cycles: usize) -> Interrupt {
-        // TODO: clock...
+    /// Call to enable audio on the appropriate thread.
+    /// 
+    /// This should be done before any rendering.
+    pub fn enable_audio(&mut self, sample_sender: Sender<SamplePacket>) {
+        self.sample_sender = Some(sample_sender);
+    }
 
+    pub fn clock(&mut self, cycles: usize) -> Interrupt {
         if self.transfer_fifo {
             self.transfer_from_fifo();
         }
 
+        // TODO: is this a bit intensive..?
+        for voice in self.voices.iter_mut() {
+            voice.clock(cycles);
+        }
+
+        self.cycle_count += cycles;
+        if self.cycle_count > CYCLES_PER_SAMPLE {
+            self.cycle_count -= CYCLES_PER_SAMPLE;
+
+            // Generate sample
+            let sample = self.generate_sample();
+            // TODO:
+            self.sample_buffer.push(sample);
+            
+            // Output to audio thread
+            if self.sample_buffer.len() >= SAMPLE_PACKET_SIZE {
+                let sample_packet = std::mem::replace(&mut self.sample_buffer, Vec::with_capacity(SAMPLE_PACKET_SIZE)).into_boxed_slice();
+                if let Some(s) = &self.sample_sender {
+                    let _ = s.send(sample_packet);
+                }
+            }
+        }
+
+        // TODO: latch IRQ.
         if self.control.contains(SPUControl::Enable.union(SPUControl::IRQEnable)) &&
             self.status.contains(SPUStatus::IRQ) {
             Interrupt::SPU
         } else {
             Interrupt::empty()
         }
+    }
+
+    pub fn dma_ready(&self) -> bool {
+        self.status.contains(SPUStatus::DMATransferReq)
     }
 }
 
@@ -241,6 +306,22 @@ impl SPU {
             self.status.remove(SPUStatus::TransferBusy);
             self.transfer_fifo = false;
         }
+    }
+
+    fn generate_sample(&mut self) -> Stereo<f32> {
+        if !self.control.contains(SPUControl::Enable) {
+            return [0.0, 0.0];
+        }
+
+        let irq_addr = (self.ram_irq_addr as u32) * 8;
+        let mut output = (0, 0);
+        for voice in self.voices.iter() {
+            let voice_out = voice.get_sample(&self.ram, irq_addr);
+            output.0 += voice_out.0;
+            output.1 += voice_out.1;
+        }
+
+        [0.0, 0.0]
     }
 }
 

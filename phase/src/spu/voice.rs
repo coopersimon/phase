@@ -1,6 +1,9 @@
+use crate::mem::ram::RAM;
+
 
 #[derive(Default)]
 pub struct Voice {
+    // Registers
     vol_left:       u16,    // 0
     vol_right:      u16,    // 2
     sample_rate:    u16,    // 4
@@ -38,5 +41,13 @@ impl Voice {
             0xE => self.repeat_addr = data,
             _ => unreachable!()
         }
+    }
+
+    pub fn clock(&mut self, cycles: usize) {
+        // ?
+    }
+
+    pub fn get_sample(&self, ram: &RAM, irq_addr: u32) -> (i32, i32) {
+        (0, 0)
     }
 }

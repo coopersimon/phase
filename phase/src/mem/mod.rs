@@ -4,13 +4,14 @@ mod control;
 mod dma;
 
 use mips::mem::{Data, Mem32};
+use crossbeam_channel::unbounded;
 use ram::RAM;
 use bios::BIOS;
 use control::MemControl;
 use dma::DMA;
 pub use dma::DMADevice;
 
-use crate::PlayStationConfig;
+use crate::{AudioChannel, PlayStationConfig};
 use crate::gpu::GPU;
 use crate::io::{BusIO, InputMessage};
 use crate::spu::SPU;
@@ -68,6 +69,12 @@ impl MemBus {
         }
     }
 
+    pub fn enable_audio(&mut self) -> AudioChannel {
+        let (sample_tx, sample_rx) = unbounded();
+        self.spu.enable_audio(sample_tx);
+        sample_rx
+    }
+
     /// Clock internally, and set interrupt bits.
     /// 
     /// Returns false if a frame is about to begin,
@@ -95,8 +102,9 @@ impl MemBus {
         let cd_irq = self.cdrom.clock(cycles);
 
         let spu_irq = self.spu.clock(cycles);
-        // TODO: drive this properly...
-        self.dma.spu_req();
+        if self.spu.dma_ready() {
+            self.dma.spu_req();
+        }
 
         let peripheral_irq = self.peripheral.clock(cycles);
 

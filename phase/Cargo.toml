@@ -10,3 +10,7 @@ crossbeam-channel = "0.5"
 [dependencies.mips]
 git = "https://github.com/coopersimon/e-mips"
 #path = "../../e-mips"
+
+[dependencies.dasp]
+version = "0.11"
+features = ["interpolate", "interpolate-sinc", "ring_buffer", "signal"]

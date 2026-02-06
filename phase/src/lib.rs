@@ -13,9 +13,16 @@ mod utils;
 mod io;
 
 use std::path::PathBuf;
+use crossbeam_channel::Receiver;
 
 pub use crate::cpu::PSDebugger as PSDebugger;
 use crate::peripheral::controller::ControllerState;
+use crate::spu::{
+    REAL_BASE_SAMPLE_RATE,
+    resampler::*
+};
+
+type AudioChannel = Receiver<SamplePacket>;//(, Receiver<f64>);
 
 /// Config for PlayStation.
 pub struct PlayStationConfig {
@@ -26,6 +33,7 @@ pub struct PlayStationConfig {
 pub struct PlayStation {
     cpu: Option<cpu::CPU>,
     io: io::IO,
+    audio_channel: Option<AudioChannel>,
     // Input state:
     input: Vec<io::InputMessage>,
     port_1_controller: Option<ControllerState>,
@@ -35,10 +43,12 @@ pub struct PlayStation {
 impl PlayStation {
     pub fn new(config: PlayStationConfig) -> Self {
         let (io, bus_io) = io::IO::new();
-        let cpu = cpu::CPU::new(&config, bus_io);
+        let mut cpu = cpu::CPU::new(&config, bus_io);
+        let audio_channel = cpu.enable_audio();
         Self {
             cpu: Some(cpu),
             io,
+            audio_channel: Some(audio_channel),
             input: Vec::new(),
             port_1_controller: None,
             port_2_controller: None,
@@ -73,6 +83,21 @@ impl PlayStation {
     /// Warning: this will panic if the CPU thread has begun.
     pub fn make_debugger(self) -> PSDebugger {
         PSDebugger::new(self.cpu.expect("CPU thread running!"))
+    }
+
+    pub fn enable_audio(&mut self, sample_rate: f64) -> Option<AudioHandler> {
+        if let Some(sample_rx) = self.audio_channel.take() {
+            Some(AudioHandler {
+                resampler: Resampler::new(
+                    sample_rx,
+                    None,
+                    REAL_BASE_SAMPLE_RATE,
+                    sample_rate
+                ),
+            })
+        } else {
+            None
+        }
     }
 
     pub fn attach_controller(&mut self, controller: ControllerType, port: Port) {
@@ -129,6 +154,21 @@ impl Frame {
             self.size = size;
             self.frame_buffer.resize(size.0 * size.1 * 4, 0);
             self.frame_buffer.fill(0);
+        }
+    }
+}
+
+/// Created by PlayStation.
+pub struct AudioHandler {
+    resampler:    Resampler,
+}
+
+impl AudioHandler {
+    /// Fill the provided buffer with samples.
+    /// The format is PCM interleaved stereo.
+    pub fn get_audio_packet(&mut self, buffer: &mut [f32]) {
+        for (o_frame, i_frame) in buffer.chunks_exact_mut(2).zip(&mut self.resampler) {
+            o_frame.copy_from_slice(&i_frame);
         }
     }
 }

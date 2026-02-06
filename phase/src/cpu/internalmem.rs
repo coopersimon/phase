@@ -1,7 +1,7 @@
 use mips::{coproc::Coprocessor0, mem::{Data, Mem32}};
 
 use crate::{
-    PlayStationConfig, cpu::cop0::SystemCoproc, io::BusIO, mem::{MemBus, ram::RAM}
+    AudioChannel, PlayStationConfig, cpu::cop0::SystemCoproc, io::BusIO, mem::{MemBus, ram::RAM}
 };
 
 const I_CACHE_SIZE: u32 = 4 * 1024;
@@ -26,6 +26,10 @@ impl InternalMem {
             i_cache:        RAM::new(I_CACHE_SIZE as usize),
             cache_control:  0,
         }
+    }
+
+    pub fn enable_audio(&mut self) -> AudioChannel {
+        self.mem_bus.enable_audio()
     }
 }
 
