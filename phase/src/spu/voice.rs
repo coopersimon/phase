@@ -34,8 +34,8 @@ pub struct Voice {
 impl Voice {
     pub fn read_halfword(&self, addr: u32) -> u16 {
         match addr {
-            0x0 => self.vol.left as u16,
-            0x2 => self.vol.right as u16,
+            0x0 => self.vol.get_left(),
+            0x2 => self.vol.get_right(),
             0x4 => self.sample_rate,
             0x6 => self.start_addr,
             0x8 => self.adsr_lo,
@@ -72,8 +72,7 @@ impl Voice {
     }
 
     pub fn key_off(&mut self) {
-        // TODO: jump to release.
-        self.active = false;
+        self.adsr_gen.release();
     }
 
     pub fn set_pitch_mod(&mut self, pmod: bool) {
@@ -136,8 +135,13 @@ impl Voice {
     /// Returns true if a new block needs to be decoded.
     fn step(&mut self, prev_voice_vol: i16) -> bool {
         let mut needs_decode_block = self.adpcm_gen.needs_block();
-        let step = self.sample_rate.min(0x4000) as usize;
-        // TODO: pitch mod step.
+        let step = if self.pmod {
+            let factor = (prev_voice_vol as i32) + 0x8000;
+            let step = (self.sample_rate as i16) as i32;
+            (((step * factor) >> 15) & 0xFFFF) as u16
+        } else {
+            self.sample_rate
+        }.min(0x4000) as usize;
         let new_count = self.pitch_count + step;
         let sample_idx = new_count >> 12;
         if sample_idx >= 28 {
@@ -183,6 +187,9 @@ impl Voice {
     fn apply_envelope(&mut self, sample: i32) -> (i32, i32) {
         let adsr_vol = self.adsr_gen.step();
         self.adsr_vol = adsr_vol as u16;
+        if self.adsr_gen.is_off() {
+            self.active = false;
+        }
         let env_sample = (sample * adsr_vol as i32) >> 16;
         let sweep_vol = self.vol.get_vol();
         let sample_left = (env_sample * sweep_vol.left as i32) >> 16;

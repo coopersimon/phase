@@ -149,8 +149,8 @@ impl MemInterface for SPU {
                 let voice_idx = (addr >> 4) & 0x1F;
                 self.voices[voice_idx as usize].read_halfword(addr & 0xF)
             },
-            0x1F80_1D80 => self.main_vol.left as u16,
-            0x1F80_1D82 => self.main_vol.right as u16,
+            0x1F80_1D80 => self.main_vol.get_left(),
+            0x1F80_1D82 => self.main_vol.get_right(),
             0x1F80_1D84 => self.reverb_vol.left as u16,
             0x1F80_1D86 => self.reverb_vol.right as u16,
             0x1F80_1D88 => 0, // KON
@@ -352,7 +352,7 @@ impl SPU {
     }
 
     fn set_pitch_mod_lo(&mut self, data: u16) {
-        for i in 0..16 {
+        for i in 1..16 {
             self.voices[i].set_pitch_mod(test_bit!(data, i));
         }
     }
@@ -365,7 +365,7 @@ impl SPU {
 
     fn get_pitch_mod_lo(&self) -> u16 {
         let mut pmod = 0;
-        for i in 0..16 {
+        for i in 1..16 {
             pmod |= if self.voices[i].get_pitch_mod() {1 << i} else {0};
         }
         pmod
@@ -417,13 +417,9 @@ impl SPU {
         let mut prev_voice_vol = 0;
         for voice in self.voices.iter_mut() {
             let (voice_out, irq) = voice.clock(&self.ram, irq_addr, prev_voice_vol);
-            if voice.get_pitch_mod() {
-                prev_voice_vol = voice.get_adsr_vol();
-            } else {
-                output.0 += voice_out.0;
-                output.1 += voice_out.1;
-                prev_voice_vol = 0;
-            }
+            output.0 += voice_out.0;
+            output.1 += voice_out.1;
+            prev_voice_vol = voice.get_adsr_vol();
             if irq {
                 // TODO
             }
