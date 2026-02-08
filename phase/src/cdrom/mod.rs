@@ -1,3 +1,5 @@
+mod xaaudio;
+
 use std::{
     fs::File,
     io::{
@@ -9,7 +11,9 @@ use std::{
 };
 
 use mips::mem::Data;
+use dasp::frame::Stereo;
 
+use xaaudio::XAAudio;
 use crate::{interrupt::Interrupt, mem::DMADevice};
 use crate::utils::{
     bits::*,
@@ -47,13 +51,7 @@ pub struct CDROM {
     int_flags: IntFlags,
     request: Request,
 
-    vol_left_to_left: u8,
-    vol_left_to_right: u8,
-    vol_right_to_left: u8,
-    vol_right_to_right: u8,
-    file_filter: u8,
-    channel_filter: u8,
-    sound_map_info: SoundMapInfo,
+    xa_audio: XAAudio,
 
     param_fifo: VecDeque<u8>,
     response_fifo: VecDeque<u8>,
@@ -86,13 +84,7 @@ impl CDROM {
             int_flags: IntFlags::Unused,
             request: Request::empty(),
 
-            vol_left_to_left: 0,
-            vol_left_to_right: 0,
-            vol_right_to_left: 0,
-            vol_right_to_right: 0,
-            file_filter: 0,
-            channel_filter: 0,
-            sound_map_info: SoundMapInfo::empty(),
+            xa_audio: XAAudio::new(),
 
             param_fifo: VecDeque::new(),
             response_fifo: VecDeque::new(),
@@ -153,6 +145,12 @@ impl CDROM {
             Interrupt::empty()
         }
     }
+
+    /// This method can be used to retrieve the decoded audio samples
+    /// for transportation to SPU, if new ones are ready.
+    pub fn fetch_decoded_audio<'a> (&'a mut self) -> Option<&'a [Stereo<i16>]> {
+        self.xa_audio.fetch_decoded_audio()
+    }
 }
 
 impl MemInterface for CDROM {
@@ -178,23 +176,23 @@ impl MemInterface for CDROM {
             0x1F80_1800 => self.write_status(data),
             0x1F80_1801 => match self.index() {
                 0 => self.write_command(data),
-                1 => {}, // TODO: sound map data out
-                2 => self.sound_map_info = SoundMapInfo::from_bits_truncate(data),
-                3 => self.vol_right_to_right = data,
+                1 => self.xa_audio.write_data(data),
+                2 => self.xa_audio.set_sound_map_info(data),
+                3 => self.xa_audio.set_right_to_right(data),
                 _ => unreachable!()
             },
             0x1F80_1802 => match self.index() {
                 0 => self.write_parameter(data),
                 1 => self.set_int_enable(data),
-                2 => self.vol_left_to_left = data,
-                3 => self.vol_right_to_left = data,
+                2 => self.xa_audio.set_left_to_left(data),
+                3 => self.xa_audio.set_right_to_left(data),
                 _ => unreachable!()
             },
             0x1F80_1803 => match self.index() {
                 0 => self.write_request(data),
                 1 => self.set_int_flags(data),
-                2 => self.vol_left_to_right = data,
-                3 => {}, // TODO: audio vol apply
+                2 => self.xa_audio.set_left_to_right(data),
+                3 => self.xa_audio.apply_changes(data),
                 _ => unreachable!()
             },
             _ => panic!("invalid CDROM addr {:X}", addr)
@@ -284,8 +282,8 @@ bitflags::bitflags! {
 }
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy)]
-    struct SoundMapInfo: u8 {
+    #[derive(Clone, Copy, Default)]
+    struct CodingInfo: u8 {
         const Emphasis      = bit!(6);
         const BitsPerSample = bit!(4);
         const SampleRate    = bit!(2);
@@ -418,13 +416,13 @@ impl CDROM {
         self.read_from_file();
         let start_pos = self.seek_file_offset - self.buffer_file_offset;
         self.current_sector_header = SectorHeader::from_slice(&self.buffer[(start_pos + SECTOR_SYNC_BYTES) as usize..]);
-        let trigger_int_1 = if self.send_xa_adpcm_sector() {
+        let trigger_int_1 = if self.send_xa_adpcm_sector(start_pos) {
             false
         } else {
             // Send as data.
             if self.mode.contains(DriveMode::SectorSize) {
                 self.sector_offset = start_pos + SECTOR_SYNC_BYTES;
-                self.data_fifo_size = SECTOR_SIZE - SECTOR_SYNC_BYTES;//SECTOR_DATA + SECTOR_SYNC_BYTES;
+                self.data_fifo_size = SECTOR_SIZE - SECTOR_SYNC_BYTES;
             } else {
                 self.sector_offset = start_pos + SECTOR_HEADER;
                 self.data_fifo_size = SECTOR_DATA;
@@ -442,7 +440,7 @@ impl CDROM {
     /// 
     /// The sector might not be ADPCM, in which case, this
     /// will return false.
-    fn send_xa_adpcm_sector(&mut self) -> bool {
+    fn send_xa_adpcm_sector(&mut self, data_start_pos: u64) -> bool {
         if self.mode.contains(DriveMode::XAADPCM) {
             //println!("try XA-ADPCM: {:X} {:X} {:X} {:X}", self.current_sector_header.file, self.current_sector_header.channel, self.current_sector_header.submode.bits(), self.current_sector_header.coding);
             if !self.current_sector_header.submode.contains(CDSectorSubmode::Audio | CDSectorSubmode::RealTime) {
@@ -450,13 +448,13 @@ impl CDROM {
             }
             self.status.insert(Status::ADPBusy);
             if self.mode.contains(DriveMode::XAFilter) {
-                if self.current_sector_header.file != self.file_filter ||
-                    self.current_sector_header.channel != self.channel_filter {
+                if !self.xa_audio.test_filter(self.current_sector_header.file, self.current_sector_header.channel) {
                     // Skip this sector.
                     return true;
                 }
             }
-            // TODO: send to SPU.
+            let pos = (data_start_pos + SECTOR_HEADER) as usize;
+            self.xa_audio.write_audio_sector(&self.buffer[pos..(pos + 0x900)], self.current_sector_header.coding);
             true
         } else {
             false
@@ -622,7 +620,7 @@ struct SectorHeader {
     file:    u8,
     channel: u8,
     submode: CDSectorSubmode,
-    coding:  u8,
+    coding:  CodingInfo,
 }
 
 impl SectorHeader {
@@ -635,7 +633,7 @@ impl SectorHeader {
             file:    data[4],
             channel: data[5],
             submode: CDSectorSubmode::from_bits_truncate(data[6]),
-            coding:  data[7],
+            coding:  CodingInfo::from_bits_truncate(data[7]),
         }
     }
 }
@@ -649,8 +647,9 @@ impl CDROM {
     }
 
     fn set_filter(&mut self) -> DriveResult<()> {
-        self.file_filter = self.read_parameter()?;
-        self.channel_filter = self.read_parameter()?;
+        let file_filter = self.read_parameter()?;
+        let channel_filter = self.read_parameter()?;
+        self.xa_audio.set_filters(file_filter, channel_filter);
         self.send_response(self.drive_status.bits(), 3);
         self.command_complete()
     }
@@ -838,8 +837,9 @@ impl CDROM {
         self.send_response(self.drive_status.bits(), 3);
         self.send_response(self.mode.bits(), 3);
         self.send_response(0x00, 3);
-        self.send_response(self.file_filter, 3);
-        self.send_response(self.channel_filter, 3);
+        let (file_filter, channel_filter) = self.xa_audio.get_filters();
+        self.send_response(file_filter, 3);
+        self.send_response(channel_filter, 3);
         self.command_complete()
     }
 
@@ -851,7 +851,7 @@ impl CDROM {
         self.send_response(self.current_sector_header.file, 3);
         self.send_response(self.current_sector_header.channel, 3);
         self.send_response(self.current_sector_header.submode.bits(), 3);
-        self.send_response(self.current_sector_header.coding, 3);
+        self.send_response(self.current_sector_header.coding.bits(), 3);
         self.command_complete()
     }
 

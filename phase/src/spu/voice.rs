@@ -1,6 +1,10 @@
-use crate::mem::ram::RAM;
+use dasp::frame::{Frame, Stereo};
+
+use crate::{
+    mem::ram::RAM,
+    audio::ADPCMDecoder
+};
 use super::{
-    adpcm::ADPCMDecoder,
     adsr::ADSRGenerator,
     sweep::SweepVolume,
 };
@@ -100,9 +104,9 @@ impl Voice {
 
     /// Clock a sample to advance audio decoding.
     /// Returns true if the irq_addr was encountered.
-    pub fn clock(&mut self, ram: &RAM, irq_addr: u32, prev_voice_vol: i16, noise_level: i16) -> ((i32, i32), bool) {
+    pub fn clock(&mut self, ram: &RAM, irq_addr: u32, prev_voice_vol: i16, noise_level: i16) -> (Stereo<i32>, bool) {
         if !self.active {
-            return ((0, 0), false);
+            return (Stereo::EQUILIBRIUM, false);
         }
         let (sample, irq) = if self.noise {
             (noise_level as i32, false)
@@ -155,7 +159,7 @@ impl Voice {
 
     /// Decode the next ADPCM block, and advance the address.
     fn decode_next_block(&mut self, ram: &RAM) {
-        if self.adpcm_gen.decode_block(ram.get_byte_slice(self.current_addr, 16)) {
+        if self.adpcm_gen.decode_spu_block(ram.get_byte_slice(self.current_addr, 16)) {
             self.repeat_addr = (self.current_addr / 8) as u16;
         }
         if self.adpcm_gen.is_loop_end() {
@@ -180,7 +184,7 @@ impl Voice {
         (out >> 15).clamp(MIN, MAX)
     }
 
-    fn apply_envelope(&mut self, sample: i32) -> (i32, i32) {
+    fn apply_envelope(&mut self, sample: i32) -> Stereo<i32> {
         let adsr_vol = self.adsr_gen.step();
         self.adsr_vol = adsr_vol as u16;
         if self.adsr_gen.is_off() {
@@ -190,7 +194,7 @@ impl Voice {
         let sweep_vol = self.vol.get_vol();
         let sample_left = (env_sample * sweep_vol.left as i32) >> 16;
         let sample_right = (env_sample * sweep_vol.right as i32) >> 16;
-        (sample_left, sample_right)
+        [sample_left, sample_right]
     }
 }
 

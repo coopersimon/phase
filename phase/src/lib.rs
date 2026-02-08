@@ -11,16 +11,14 @@ mod peripheral;
 mod mdec;
 mod utils;
 mod io;
+mod audio;
 
 use std::path::PathBuf;
 use crossbeam_channel::Receiver;
 
 pub use crate::cpu::PSDebugger as PSDebugger;
 use crate::peripheral::controller::ControllerState;
-use crate::spu::{
-    REAL_BASE_SAMPLE_RATE,
-    resampler::*
-};
+use crate::audio::{Resampler, SamplePacket, REAL_BASE_SAMPLE_RATE};
 
 type AudioChannel = Receiver<SamplePacket>;//(, Receiver<f64>);
 

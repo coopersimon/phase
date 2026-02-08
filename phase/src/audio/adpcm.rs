@@ -29,16 +29,17 @@ impl ADPCMDecoder {
         !self.is_decoded
     }
 
-    /// Decode a block of ADPCM samples. Slice input should be 16 bytes.
+    /// Decode a block of SPU-ADPCM samples. Slice input should be 16 bytes.
     /// Returns true if this is the start of a loop.
-    pub fn decode_block(&mut self, data: &[u8]) -> bool {
+    pub fn decode_spu_block(&mut self, data: &[u8]) -> bool {
         // Preserve the last 3 samples:
         self.prev_samples[0] = self.samples[25];
         self.prev_samples[1] = self.samples[26];
         self.prev_samples[2] = self.samples[27];
         // Decode the samples:
-        let shift = data[0] & 0xF;
-        let filter = ((data[0] >> 4) & 0x7) as usize;
+        let header = data[0];
+        let shift = header & 0xF;
+        let filter = ((header >> 4) & 0x7) as usize;
         let pos_filter = POS_ADPCM_FILTER[filter];
         let neg_filter = NEG_ADPCM_FILTER[filter];
         let mut prev_0 = self.samples[26] as i32;
@@ -66,6 +67,25 @@ impl ADPCMDecoder {
         loop_start
     }
 
+    /// Decode a block of XA-ADPCM samples. Every 4th byte will be read from input data.
+    /// Slice input should be 112 bytes.
+    pub fn decode_xa_4bit_block(&mut self, data: &[u8], header: u8, nybble_shift: u8) {
+        let shift = header & 0xF;
+        let filter = ((header >> 4) & 0x3) as usize;
+        let pos_filter = POS_ADPCM_FILTER[filter];
+        let neg_filter = NEG_ADPCM_FILTER[filter];
+        let mut prev_0 = self.samples[26] as i32;
+        let mut prev_1 = self.samples[27] as i32;
+        let left_shift = nybble_shift + 8;
+        for i in 0..28 {
+            let in_data = (data[i * 4] as i16) << left_shift;
+            let sample = decode_adpcm_sample(in_data as i16, shift, prev_0, prev_1, pos_filter, neg_filter);
+            prev_0 = prev_1;
+            prev_1 = sample as i32;
+            self.samples[i] = sample;
+        }
+    }
+
     pub fn is_loop_end(&self) -> bool {
         self.loop_end
     }
@@ -75,6 +95,7 @@ impl ADPCMDecoder {
     }
 
     /// Get the 4 most recent samples from the decoded data.
+    /// These can be used for gaussian interpolation.
     pub fn get_samples(&self, n: usize) -> [i16; 4] {
         [
             self.samples[n],
@@ -82,6 +103,11 @@ impl ADPCMDecoder {
             if n > 1 {self.samples[n - 2]} else {self.prev_samples[1 + n]},
             if n > 2 {self.samples[n - 3]} else {self.prev_samples[0 + n]},
         ]
+    }
+
+    /// Get all the samples from the decoded data.
+    pub fn get_sample_block<'a>(&'a self) -> &'a [i16] {
+        &self.samples
     }
 }
 

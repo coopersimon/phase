@@ -100,6 +100,9 @@ impl MemBus {
         let timer_irq = self.timers.clock(cycles, &gpu_stat);
 
         let cd_irq = self.cdrom.clock(cycles);
+        if let Some(samples) = self.cdrom.fetch_decoded_audio() {
+            self.spu.push_new_cd_audio(samples);
+        }
 
         let spu_irq = self.spu.clock(cycles);
         if self.spu.dma_ready() {

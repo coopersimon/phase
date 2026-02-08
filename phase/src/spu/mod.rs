@@ -1,6 +1,4 @@
 mod voice;
-pub mod resampler;
-mod adpcm;
 mod adsr;
 mod sweep;
 
@@ -13,6 +11,7 @@ use dasp::frame::{
 use mips::mem::Data;
 
 use crate::{
+    audio::SamplePacket,
     interrupt::Interrupt,
     mem::{DMADevice, ram::RAM},
     utils::{bits::*, interface::MemInterface}
@@ -20,26 +19,12 @@ use crate::{
 
 use voice::Voice;
 use sweep::SweepVolume;
-use resampler::*;
 
 const SPU_RAM_SIZE: usize = 512 * 1024;
 const SPU_FIFO_SIZE: usize = 32;
 
-const CYCLES_PER_SAMPLE: usize = 0x300;
+pub const CYCLES_PER_SAMPLE: usize = 0x300;
 const SAMPLE_PACKET_SIZE: usize = 32;
-
-/// Cycles per second.
-const CLOCK_RATE: usize = CYCLES_PER_SAMPLE * 44100;
-/// Emulated cycles per second.
-/// TODO: PAL (get these values from GPU)
-const REAL_CLOCK_RATE: f64 = 3413. * 263. * 60. * 7. / 11.;
-
-/// Base sample rate for audio.
-const BASE_SAMPLE_RATE: f64 = 44_100.0;
-
-const REAL_SAMPLE_RATE_RATIO: f64 = REAL_CLOCK_RATE / (CLOCK_RATE as f64);
-pub const REAL_BASE_SAMPLE_RATE: f64 = BASE_SAMPLE_RATE * REAL_SAMPLE_RATE_RATIO;
-
 
 /// Sound processing unit.
 pub struct SPU {
@@ -67,6 +52,10 @@ pub struct SPU {
     cycle_count: usize,
     noise_level: i16,
     noise_timer: isize,
+
+    cd_audio_sample:    Stereo<i16>,
+    cd_audio_damping:   u8,
+    cd_audio_fifo:      VecDeque<Stereo<i16>>,
 
     // Comms with audio thread
     sample_buffer:      Vec<Stereo<f32>>,
@@ -99,6 +88,10 @@ impl SPU {
             noise_level: 0,
             noise_timer: 0,
 
+            cd_audio_sample:    Stereo::EQUILIBRIUM,
+            cd_audio_damping:   0,
+            cd_audio_fifo:      VecDeque::new(),
+
             sample_buffer:  Vec::new(),
             sample_sender:  None,
         }
@@ -111,6 +104,12 @@ impl SPU {
         self.sample_sender = Some(sample_sender);
     }
 
+    pub fn push_new_cd_audio(&mut self, cd_audio: &[Stereo<i16>]) {
+        self.cd_audio_fifo.extend(cd_audio);
+    }
+
+    /// Clock internally, generate samples if necessary,
+    /// and push a new audio data batch to output.
     pub fn clock(&mut self, cycles: usize) -> Interrupt {
         if self.transfer_fifo {
             self.transfer_from_fifo();
@@ -119,6 +118,8 @@ impl SPU {
         self.cycle_count += cycles;
         if self.cycle_count > CYCLES_PER_SAMPLE {
             self.cycle_count -= CYCLES_PER_SAMPLE;
+
+            self.clock_noise();
 
             // Generate sample
             let sample = self.generate_sample();
@@ -415,11 +416,8 @@ impl SPU {
         noise
     }
 
-    fn generate_sample(&mut self) -> Stereo<f32> {
-        if !self.control.contains(SPUControl::Enable) {
-            return Stereo::EQUILIBRIUM;
-        }
-
+    /// Advance the noise. Should be called at 44.1kHz.
+    fn clock_noise(&mut self) {
         let noise_step = ((self.control.intersection(SPUControl::NoiseFreqStep).bits() >> 8) + 4) as isize;
         self.noise_timer -= noise_step;
         if self.noise_timer < 0 {
@@ -434,14 +432,21 @@ impl SPU {
                 self.noise_timer += 0x20000 >> noise_shift;
             }
         }
+    }
+
+    /// Generate sample from SPU audio.
+    fn generate_sample(&mut self) -> Stereo<f32> {
+        if !self.control.contains(SPUControl::Enable) {
+            return Stereo::EQUILIBRIUM;
+        }
         
         let irq_addr = (self.ram_irq_addr as u32) * 8;
-        let mut output = (0, 0);
+        let mut output = Stereo::<i32>::EQUILIBRIUM;
         let mut prev_voice_vol = 0;
         for voice in self.voices.iter_mut() {
             let (voice_out, irq) = voice.clock(&self.ram, irq_addr, prev_voice_vol, self.noise_level);
-            output.0 += voice_out.0;
-            output.1 += voice_out.1;
+            output[0] += voice_out[0];
+            output[1] += voice_out[1];
             if irq && self.control.contains(SPUControl::IRQEnable) && !self.status.contains(SPUStatus::IRQ) {
                 self.status.insert(SPUStatus::IRQ);
                 self.irq_latch = true;
@@ -449,12 +454,30 @@ impl SPU {
             prev_voice_vol = voice.get_adsr_vol();
         }
 
+        if self.control.contains(SPUControl::CDAudioEnable) {
+            let cd_audio = if let Some(cd_audio) = self.cd_audio_fifo.pop_front() {
+                self.cd_audio_sample = cd_audio;
+                self.cd_audio_damping = 255;
+                cd_audio
+            } else {
+                self.cd_audio_damping = self.cd_audio_damping.saturating_sub(1);
+                [
+                    ((self.cd_audio_sample[0] as i32 * self.cd_audio_damping as i32) >> 8) as i16,
+                    ((self.cd_audio_sample[1] as i32 * self.cd_audio_damping as i32) >> 8) as i16
+                ]
+            };
+            output[0] += (cd_audio[0] as i32) * (self.cd_input_vol.left as i32) >> 15;
+            output[1] += (cd_audio[1] as i32) * (self.cd_input_vol.right as i32) >> 15;
+        }
+
+        // TODO: reverb.
+
         if !self.control.contains(SPUControl::Mute) {
             Stereo::EQUILIBRIUM
         } else {
             let main_vol = self.main_vol.get_vol();
-            let left = ((output.0.clamp(i16::MIN as i32, i16::MAX as i32)) * (main_vol.left as i32)) >> 15;
-            let right = ((output.1.clamp(i16::MIN as i32, i16::MAX as i32)) * (main_vol.right as i32)) >> 15;
+            let left = ((output[0].clamp(i16::MIN as i32, i16::MAX as i32)) * (main_vol.left as i32)) >> 15;
+            let right = ((output[1].clamp(i16::MIN as i32, i16::MAX as i32)) * (main_vol.right as i32)) >> 15;
             [left as f32 / (32768.0), right as f32 / (32768.0)]
         }
     }
