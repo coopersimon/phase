@@ -7,6 +7,7 @@ use crate::utils::bits::*;
 /// BRR is bit-rate reduction.
 #[derive(Default)]
 pub struct ADPCMDecoder {
+    prev_samples: [i16; 3],
     samples:    [i16; 28],
     // Does this decoder have a set of decoded samples?
     is_decoded: bool,
@@ -20,6 +21,7 @@ impl ADPCMDecoder {
     pub fn reset(&mut self) {
         self.is_decoded = false;
         self.samples.fill(0);
+        self.prev_samples.fill(0);
     }
 
     /// Returns true if a new block needs to be decoded.
@@ -30,6 +32,10 @@ impl ADPCMDecoder {
     /// Decode a block of ADPCM samples. Slice input should be 16 bytes.
     /// Returns true if this is the start of a loop.
     pub fn decode_block(&mut self, data: &[u8]) -> bool {
+        // Preserve the last 3 samples:
+        self.prev_samples[0] = self.samples[25];
+        self.prev_samples[1] = self.samples[26];
+        self.prev_samples[2] = self.samples[27];
         // Decode the samples:
         let shift = data[0] & 0xF;
         let filter = ((data[0] >> 4) & 0x7) as usize;
@@ -68,9 +74,14 @@ impl ADPCMDecoder {
         self.release
     }
 
-    /// Get the next sample from the decoded data.
-    pub fn get_sample(&self, n: usize) -> i16 {
-        self.samples[n]
+    /// Get the 4 most recent samples from the decoded data.
+    pub fn get_samples(&self, n: usize) -> [i16; 4] {
+        [
+            self.samples[n],
+            if n > 0 {self.samples[n - 1]} else {self.prev_samples[2 + n]},
+            if n > 1 {self.samples[n - 2]} else {self.prev_samples[1 + n]},
+            if n > 2 {self.samples[n - 3]} else {self.prev_samples[0 + n]},
+        ]
     }
 }
 

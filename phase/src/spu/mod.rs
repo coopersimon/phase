@@ -61,9 +61,12 @@ pub struct SPU {
 
     control:    SPUControl,
     status:     SPUStatus,
+    irq_latch:  bool,
 
     // Sample generation:
     cycle_count: usize,
+    noise_level: i16,
+    noise_timer: isize,
 
     // Comms with audio thread
     sample_buffer:      Vec<Stereo<f32>>,
@@ -90,8 +93,11 @@ impl SPU {
 
             control:    SPUControl::empty(),
             status:     SPUStatus::empty(),
+            irq_latch:  false,
 
             cycle_count: 0,
+            noise_level: 0,
+            noise_timer: 0,
 
             sample_buffer:  Vec::new(),
             sample_sender:  None,
@@ -116,7 +122,6 @@ impl SPU {
 
             // Generate sample
             let sample = self.generate_sample();
-            // TODO:
             self.sample_buffer.push(sample);
             
             // Output to audio thread
@@ -126,12 +131,13 @@ impl SPU {
                     let _ = s.send(sample_packet);
                 }
             }
-        }
 
-        // TODO: latch IRQ.
-        if self.control.contains(SPUControl::Enable.union(SPUControl::IRQEnable)) &&
-            self.status.contains(SPUStatus::IRQ) {
-            Interrupt::SPU
+            if self.irq_latch {
+                self.irq_latch = false;
+                Interrupt::SPU
+            } else {
+                Interrupt::empty()
+            }
         } else {
             Interrupt::empty()
         }
@@ -175,8 +181,8 @@ impl MemInterface for SPU {
             0x1F80_1DB2 => self.cd_input_vol.right as u16,
             0x1F80_1DB4 => self.ext_input_vol.left as u16,
             0x1F80_1DB6 => self.ext_input_vol.right as u16,
-            0x1F80_1DB8 => 0, // TODO: current main volume.
-            0x1F80_1DBA => 0, // TODO: current main volume.
+            0x1F80_1DB8 => self.main_vol.get_left(),
+            0x1F80_1DBA => self.main_vol.get_right(),
             0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
                 0
             },
@@ -229,12 +235,14 @@ impl MemInterface for SPU {
     // Usually SPU should not be accessed via word interface.
 
     fn read_word(&mut self, addr: u32) -> u32 {
+        panic!("read SPU word from {:X}", addr);
         let lo = self.read_halfword(addr) as u32;
         let hi = self.read_halfword(addr + 2) as u32;
         lo | (hi << 16)
     }
 
     fn write_word(&mut self, addr: u32, data: u32) {
+        panic!("write SPU word to {:X}", addr);
         let lo = data as u16;
         let hi = (data >> 16) as u16;
         self.write_halfword(addr, lo);
@@ -412,17 +420,33 @@ impl SPU {
             return Stereo::EQUILIBRIUM;
         }
 
+        let noise_step = ((self.control.intersection(SPUControl::NoiseFreqStep).bits() >> 8) + 4) as isize;
+        self.noise_timer -= noise_step;
+        if self.noise_timer < 0 {
+            let noise_shift = self.control.intersection(SPUControl::NoiseFreqShift).bits() >> 10;
+            let bit = (self.noise_level >> 15) ^
+                (self.noise_level >> 12) ^
+                (self.noise_level >> 11) ^
+                (self.noise_level >> 10) ^ 1;
+            self.noise_level = (self.noise_level << 1) | (bit & 1);
+            self.noise_timer += 0x20000 >> noise_shift;
+            if self.noise_timer < 0 {
+                self.noise_timer += 0x20000 >> noise_shift;
+            }
+        }
+        
         let irq_addr = (self.ram_irq_addr as u32) * 8;
         let mut output = (0, 0);
         let mut prev_voice_vol = 0;
         for voice in self.voices.iter_mut() {
-            let (voice_out, irq) = voice.clock(&self.ram, irq_addr, prev_voice_vol);
+            let (voice_out, irq) = voice.clock(&self.ram, irq_addr, prev_voice_vol, self.noise_level);
             output.0 += voice_out.0;
             output.1 += voice_out.1;
-            prev_voice_vol = voice.get_adsr_vol();
-            if irq {
-                // TODO
+            if irq && self.control.contains(SPUControl::IRQEnable) && !self.status.contains(SPUStatus::IRQ) {
+                self.status.insert(SPUStatus::IRQ);
+                self.irq_latch = true;
             }
+            prev_voice_vol = voice.get_adsr_vol();
         }
 
         if !self.control.contains(SPUControl::Mute) {

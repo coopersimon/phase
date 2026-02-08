@@ -26,7 +26,6 @@ pub struct Voice {
     active:         bool,
     current_addr:   u32,
     pitch_count:    usize,
-    prev_samples:   [i32; 3], // 0 = oldest, 2 = newest
 
     adsr_gen:       ADSRGenerator,
 }
@@ -62,7 +61,6 @@ impl Voice {
 
     pub fn key_on(&mut self) {
         self.current_addr = (self.start_addr as u32) * 8;
-        self.prev_samples.fill(0);
         self.active = true;
         self.pitch_count = 0;
         self.repeat_addr = self.start_addr;
@@ -102,26 +100,26 @@ impl Voice {
 
     /// Clock a sample to advance audio decoding.
     /// Returns true if the irq_addr was encountered.
-    pub fn clock(&mut self, ram: &RAM, irq_addr: u32, prev_voice_vol: i16) -> ((i32, i32), bool) {
+    pub fn clock(&mut self, ram: &RAM, irq_addr: u32, prev_voice_vol: i16, noise_level: i16) -> ((i32, i32), bool) {
         if !self.active {
             return ((0, 0), false);
         }
-        if self.noise {
-            // TODO.
-            return ((0, 0), false);
-        }
-        let needs_decode_block = self.step(prev_voice_vol);
-        let irq = if needs_decode_block {
-            let irq = self.current_addr == irq_addr;
-            self.decode_next_block(ram);
-            irq
+        let (sample, irq) = if self.noise {
+            (noise_level as i32, false)
         } else {
-            false
+            let needs_decode_block = self.step(prev_voice_vol);
+            let irq = if needs_decode_block {
+                let irq = self.current_addr == irq_addr;
+                self.decode_next_block(ram);
+                irq
+            } else {
+                false
+            };
+            let interpolation_idx = (self.pitch_count >> 4) & 0xFF;
+            let sample_idx = self.pitch_count >> 12;
+            let samples = self.adpcm_gen.get_samples(sample_idx);
+            (self.interpolate_sample(samples, interpolation_idx), irq)
         };
-        let interpolation_idx = (self.pitch_count >> 4) & 0xFF;
-        let sample_idx = self.pitch_count >> 12;
-        let new_sample = self.adpcm_gen.get_sample(sample_idx);
-        let sample = self.interpolate_sample(new_sample, interpolation_idx);
         let out_sample = self.apply_envelope(sample);
         (out_sample, irq)
     }
@@ -134,7 +132,9 @@ impl Voice {
     /// 
     /// Returns true if a new block needs to be decoded.
     fn step(&mut self, prev_voice_vol: i16) -> bool {
-        let mut needs_decode_block = self.adpcm_gen.needs_block();
+        if self.adpcm_gen.needs_block() {
+            return true;
+        }
         let step = if self.pmod {
             let factor = (prev_voice_vol as i32) + 0x8000;
             let step = (self.sample_rate as i16) as i32;
@@ -146,11 +146,11 @@ impl Voice {
         let sample_idx = new_count >> 12;
         if sample_idx >= 28 {
             self.pitch_count = new_count - (28 << 12);
-            needs_decode_block = true;
+            true
         } else {
             self.pitch_count = new_count;
+            false
         }
-        needs_decode_block
     }
 
     /// Decode the next ADPCM block, and advance the address.
@@ -162,7 +162,7 @@ impl Voice {
             self.current_addr = (self.repeat_addr as u32) * 8;
             self.endx = true;
             if self.adpcm_gen.should_release() {
-                // TODO.
+                self.adsr_gen.end();
             }
         } else {
             self.current_addr += 16;
@@ -170,18 +170,14 @@ impl Voice {
     }
 
     /// Interpolate the current sample with the previous 3 to generate the output sample.
-    /// 
-    /// Also advances the sample FIFO.
-    fn interpolate_sample(&mut self, new_sample: i16, interpolation_idx: usize) -> i32 {
-        let sample_in = new_sample as i32;
-        let a = (GAUSS_TABLE[0x0FF - interpolation_idx] * self.prev_samples[0]) >> 15;
-        let b = a + (GAUSS_TABLE[0x1FF - interpolation_idx] * self.prev_samples[1]) >> 15;
-        let c = b + (GAUSS_TABLE[0x100 + interpolation_idx] * self.prev_samples[2]) >> 15;
-        let out = c + (GAUSS_TABLE[0x000 + interpolation_idx] * sample_in) >> 15;
-        self.prev_samples[0] = self.prev_samples[1];
-        self.prev_samples[1] = self.prev_samples[2];
-        self.prev_samples[2] = sample_in;
-        out.clamp(i16::MIN as i32, i16::MAX as i32)
+    fn interpolate_sample(&mut self, samples: [i16; 4], interpolation_idx: usize) -> i32 {
+        const MIN: i32 = i16::MIN as i32;
+        const MAX: i32 = i16::MAX as i32;
+        let mut out = GAUSS_TABLE[0x0FF - interpolation_idx] * samples[3] as i32;
+        out += GAUSS_TABLE[0x1FF - interpolation_idx] * samples[2] as i32;
+        out += GAUSS_TABLE[0x100 + interpolation_idx] * samples[1] as i32;
+        out += GAUSS_TABLE[0x000 + interpolation_idx] * samples[0] as i32;
+        (out >> 15).clamp(MIN, MAX)
     }
 
     fn apply_envelope(&mut self, sample: i32) -> (i32, i32) {

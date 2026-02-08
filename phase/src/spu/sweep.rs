@@ -70,6 +70,7 @@ impl Sweep {
                 }
                 let new_value = self.current.saturating_add(self.step);
                 self.current = new_value.max(0);
+                self.counter = 0;
             }
             out
         } else {

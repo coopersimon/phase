@@ -22,7 +22,6 @@ pub struct ADSRGenerator {
     sustain_exp_dec: bool,
 
     release_count: usize,
-    release_hi_exp_count: usize,
     release_step: i16,
     release_exp_dec: bool,
 }
@@ -85,17 +84,18 @@ impl ADSRGenerator {
         let release_exp = hi_flags.contains(ADSRHi::ReleaseExponential);
         let release_shift = hi_flags.intersection(ADSRHi::ReleaseShift).bits() as i8;
         self.release_count = 1 << (release_shift - 11).max(0);
-        self.release_hi_exp_count = if release_exp {
-            self.release_count * 4
-        } else {
-            self.release_count
-        };
         self.release_exp_dec = release_exp;
         self.release_step = -8 << (11 - release_shift).max(0);
 
         self.current_state = State::Attack;
         self.current_level = 0;
         self.counter = 0;
+
+        //println!("ADSR init {:X} {:X}", lo, hi);
+        //println!("  attack  count {:X} step {:X} exp {}", self.attack_count, self.attack_step, attack_exp);
+        //println!("  decay   count {:X} step {:X}", self.decay_count, self.decay_step);
+        //println!("  sustain count {:X} step {:X} level {:X} exp {} dec {}", self.sustain_count, self.sustain_step, self.sustain_level, sustain_exp, sustain_dec);
+        //println!("  release count {:X} step {:X}", self.release_count, self.release_step);
     }
 
     /// Step the envelope and get the new volume.
@@ -125,7 +125,8 @@ impl ADSRGenerator {
                 self.counter += 1;
                 if self.counter >= self.decay_count {
                     self.counter = 0;
-                    let new_level = self.current_level - 8;
+                    let step = ((self.decay_step as i32 * self.current_level as i32) >> 15) as i16;
+                    let new_level = self.current_level + step;
                     if new_level <= self.sustain_level {
                         self.current_level = self.sustain_level;
                         self.current_state = Sustain;
@@ -138,12 +139,14 @@ impl ADSRGenerator {
                 self.counter += 1;
                 if self.counter >= self.sustain_count {
                     self.counter = 0;
-                    if self.sustain_exp_dec {
-                        let new_step = (self.sustain_step as i32 * self.current_level as i32) >> 15;
-                        self.sustain_step = new_step as i16;
-                    }
-                    let (new_level, ovf) = self.current_level.overflowing_add(self.sustain_step);
+                    let step = if self.sustain_exp_dec {
+                        ((self.sustain_step as i32 * self.current_level as i32) >> 15) as i16
+                    } else {
+                        self.sustain_step
+                    };
+                    let (new_level, ovf) = self.current_level.overflowing_add(step);
                     if !self.sustain_exp_dec && new_level > 0x6000 {
+                        // TODO: only if +exp
                         self.sustain_count = self.sustain_hi_exp_count;
                     }
                     if ovf {
@@ -161,11 +164,12 @@ impl ADSRGenerator {
                 self.counter += 1;
                 if self.counter >= self.release_count {
                     self.counter = 0;
-                    if self.release_exp_dec {
-                        let new_step = (self.release_step as i32 * self.current_level as i32) >> 15;
-                        self.release_step = new_step as i16;
-                    }
-                    let new_level = self.current_level + self.release_step;
+                    let step = if self.release_exp_dec {
+                        ((self.release_step as i32 * self.current_level as i32) >> 15) as i16
+                    } else {
+                        self.release_step
+                    };
+                    let new_level = self.current_level + step;
                     if new_level <= 0 {
                         self.current_level = 0;
                         self.current_state = Off;
@@ -182,6 +186,12 @@ impl ADSRGenerator {
     pub fn release(&mut self) {
         self.counter = 0;
         self.current_state = State::Release;
+    }
+
+    /// Release and force env to 0.
+    pub fn end(&mut self) {
+        self.release();
+        self.current_level = 0;
     }
 
     pub fn is_off(&self) -> bool {
