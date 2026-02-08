@@ -76,10 +76,9 @@ impl ADPCMDecoder {
         let neg_filter = NEG_ADPCM_FILTER[filter];
         let mut prev_0 = self.samples[26] as i32;
         let mut prev_1 = self.samples[27] as i32;
-        let left_shift = nybble_shift + 8;
         for i in 0..28 {
-            let in_data = (data[i * 4] as i16) << left_shift;
-            let sample = decode_adpcm_sample(in_data as i16, shift, prev_0, prev_1, pos_filter, neg_filter);
+            let in_data = ((data[i * 4] >> nybble_shift) as i16) << 12;
+            let sample = decode_adpcm_sample(in_data, shift, prev_0, prev_1, pos_filter, neg_filter);
             prev_0 = prev_1;
             prev_1 = sample as i32;
             self.samples[i] = sample;

@@ -162,10 +162,11 @@ impl XAAudio {
         for chunk_buffer in buffer.as_chunks::<128>().0 {
             if stereo {
                 for block in 0..4 {
+                    let header_offset = 4 + (block * 2);
                     let data = &chunk_buffer[(0x10 + block)..];
-                    let left_header = chunk_buffer[4 + block];
+                    let left_header = chunk_buffer[header_offset];
                     self.left_decoder.decode_xa_4bit_block(data, left_header, 0);
-                    let right_header = chunk_buffer[5 + block];
+                    let right_header = chunk_buffer[header_offset + 1];
                     self.right_decoder.decode_xa_4bit_block(data, right_header, 4);
                     let left_samples = self.left_decoder.get_sample_block();
                     let right_samples = self.right_decoder.get_sample_block();
@@ -176,14 +177,15 @@ impl XAAudio {
                 }
             } else {
                 for block in 0..4 {
+                    let header_offset = 4 + (block * 2);
                     let data = &chunk_buffer[(0x10 + block)..];
-                    let header_0 = chunk_buffer[4 + block];
+                    let header_0 = chunk_buffer[header_offset];
                     self.left_decoder.decode_xa_4bit_block(data, header_0, 0);
                     for mono in self.left_decoder.get_sample_block().iter() {
                         let sample = self.current_vol.apply_mono(*mono);
                         self.sample_buffer.push(sample);
                     }
-                    let header_1 = chunk_buffer[5 + block];
+                    let header_1 = chunk_buffer[header_offset + 1];
                     self.left_decoder.decode_xa_4bit_block(data, header_1, 4);
                     for mono in self.left_decoder.get_sample_block().iter() {
                         let sample = self.current_vol.apply_mono(*mono);
