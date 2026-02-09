@@ -213,6 +213,7 @@ impl MemInterface for SPU {
             0x1F80_1D9A => {}, // TODO:Echo flags
             0x1F80_1D9C => {}, // ENDX
             0x1F80_1D9E => {}, // ENDX
+            0x1F80_1DA0 => {}, // ?
             0x1F80_1DA2 => {}, // TODO: reverb base
             0x1F80_1DA4 => self.ram_irq_addr = data,
             0x1F80_1DA6 => {
@@ -222,10 +223,15 @@ impl MemInterface for SPU {
             0x1F80_1DA8 => self.write_fifo(data),
             0x1F80_1DAA => self.set_control(data),
             0x1F80_1DAC => self.ram_ctrl = data,
+            0x1F80_1DAE => {}, // status...
             0x1F80_1DB0 => self.cd_input_vol.left = data as i16,
             0x1F80_1DB2 => self.cd_input_vol.right = data as i16,
             0x1F80_1DB4 => self.ext_input_vol.left = data as i16,
             0x1F80_1DB6 => self.ext_input_vol.right = data as i16,
+            0x1F80_1DB8 => {},
+            0x1F80_1DBA => {},
+            0x1F80_1DBC => {},
+            0x1F80_1DBE => {},
             0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
                 
             },
@@ -236,14 +242,14 @@ impl MemInterface for SPU {
     // Usually SPU should not be accessed via word interface.
 
     fn read_word(&mut self, addr: u32) -> u32 {
-        panic!("read SPU word from {:X}", addr);
+        //panic!("read SPU word from {:X}", addr);
         let lo = self.read_halfword(addr) as u32;
         let hi = self.read_halfword(addr + 2) as u32;
         lo | (hi << 16)
     }
 
     fn write_word(&mut self, addr: u32, data: u32) {
-        panic!("write SPU word to {:X}", addr);
+        //panic!("write SPU word to {:X}", addr);
         let lo = data as u16;
         let hi = (data >> 16) as u16;
         self.write_halfword(addr, lo);

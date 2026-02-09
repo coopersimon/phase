@@ -162,6 +162,7 @@ struct Timer {
     pulse_latch: bool,
     in_blank:    bool,
 
+    sys_clock:   bool,
     pause:       bool,
     blank_timer: bool,
 }
@@ -176,6 +177,7 @@ impl Timer {
             pulse_latch: false,
             in_blank:    false,
 
+            sys_clock:   true,
             pause:       false,
             blank_timer
         }
@@ -208,6 +210,12 @@ impl Timer {
         } else {
             self.pause = false;
         }
+        let clock_source = (self.mode.intersection(TimerMode::ClockSrc)).bits() >> 8;
+        self.sys_clock = if self.blank_timer {
+            !test_bit!(clock_source, 0)
+        } else {
+            !test_bit!(clock_source, 1)
+        };
         self.counter = 0;
     }
 
@@ -247,12 +255,7 @@ impl Timer {
     }
 
     fn use_sys_clock(&self) -> bool {
-        let src = (self.mode.intersection(TimerMode::ClockSrc)).bits() >> 8;
-        if self.blank_timer {
-            !test_bit!(src, 0)
-        } else {
-            !test_bit!(src, 1)
-        }
+        self.sys_clock
     }
 
     fn clock(&mut self, cycles: usize) -> bool {
@@ -270,17 +273,19 @@ impl Timer {
             if self.mode.contains(TimerMode::MaxIRQ) {
                 self.trigger_interrupt();
             }
-            if !self.mode.contains(TimerMode::Reset) {
-                self.counter = (new_counter - 0xFFFF) as u16;
+            if new_counter > 0xFFFF && !self.mode.contains(TimerMode::Reset) {
+                self.counter = (new_counter - 0x10000) as u16;
             }
+            self.mode.insert(TimerMode::ReachedMax);
         }
         if new_counter >= (self.target as usize) {
             if self.mode.contains(TimerMode::TargetIRQ) {
                 self.trigger_interrupt();
             }
-            if self.mode.contains(TimerMode::Reset) {
-                self.counter = (new_counter - (self.target as usize)) as u16;
+            if new_counter > (self.target as usize) && self.mode.contains(TimerMode::Reset) {
+                self.counter = (new_counter - (self.target as usize + 1)) as u16;
             }
+            self.mode.insert(TimerMode::ReachedTarget);
         }
         prev_irq_req && !self.mode.contains(TimerMode::IRQ)
     }
