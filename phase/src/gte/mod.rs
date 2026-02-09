@@ -510,7 +510,7 @@ impl GTE {
             } else {
                 screen_x as i16
             }
-        };
+        } as u16;
         let screen_y = {
             let y_offset = self.get_control_i32(OFY) as i64;
             let mac0 = div * ir2 + y_offset;
@@ -525,7 +525,7 @@ impl GTE {
             } else {
                 screen_y as i16
             }
-        };
+        } as u16;
         self.regs[SXY2.idx()] = (screen_x as u32) | ((screen_y as u32) << 16);
         div
     }
