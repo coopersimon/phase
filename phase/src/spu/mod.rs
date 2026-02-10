@@ -60,6 +60,9 @@ pub struct SPU {
     // Comms with audio thread
     sample_buffer:      Vec<Stereo<f32>>,
     sample_sender:      Option<Sender<SamplePacket>>,
+
+    // Unknown RAM region
+    unknown_ram:    RAM,
 }
 
 impl SPU {
@@ -94,6 +97,8 @@ impl SPU {
 
             sample_buffer:  Vec::new(),
             sample_sender:  None,
+
+            unknown_ram:    RAM::new(32)
         }
     }
 
@@ -187,6 +192,8 @@ impl MemInterface for SPU {
             0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
                 0
             },
+            0x1F80_1E00..=0x1F80_1E5F => 0, // Voice internal vol
+            0x1F80_1E60..=0x1F80_1E7F => self.unknown_ram.read_halfword(addr - 0x1F80_1E60),
             _ => panic!("invalid SPU read {:X}", addr)
         }
     }
@@ -235,6 +242,7 @@ impl MemInterface for SPU {
             0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
                 
             },
+            0x1F80_1E60..=0x1F80_1E7F => self.unknown_ram.write_halfword(addr - 0x1F80_1E60, data),
             _ => panic!("invalid SPU write {:X}", addr)
         }
     }
