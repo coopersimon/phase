@@ -563,8 +563,9 @@ impl GTE {
         let ir1 = self.set_ir1((((rfc << 12) - mac1) >> shift) as i32, false);
         let mac1 = self.set_mac1(ir1 * ir0 + mac1, shift);
         self.set_ir1(mac1, ir_unsigned);
-        self.set_flag(Flag::ColRSat, (mac1 as u32) > 0xFF);
-        mac1.clamp(0, 0xFF) as u32
+        let r = mac1 >> 4;
+        self.set_flag(Flag::ColRSat, (r as u32) > 0xFF);
+        r.clamp(0, 0xFF) as u32
     }
 
     /// Interpolate mac2 value with GFC.
@@ -575,8 +576,9 @@ impl GTE {
         let ir2 = self.set_ir2((((gfc << 12) - mac2) >> shift) as i32, false);
         let mac2 = self.set_mac2(ir2 * ir0 + mac2, shift);
         self.set_ir2(mac2, ir_unsigned);
-        self.set_flag(Flag::ColGSat, (mac2 as u32) > 0xFF);
-        mac2.clamp(0, 0xFF) as u32
+        let g = mac2 >> 4;
+        self.set_flag(Flag::ColGSat, (g as u32) > 0xFF);
+        g.clamp(0, 0xFF) as u32
     }
 
     /// Interpolate mac3 value with BFC.
@@ -587,8 +589,9 @@ impl GTE {
         let ir3 = self.set_ir3((((bfc << 12) - mac3) >> shift) as i32, false);
         let mac3 = self.set_mac3(ir3 * ir0 + mac3, shift);
         self.set_ir3(mac3, ir_unsigned);
-        self.set_flag(Flag::ColBSat, (mac3 as u32) > 0xFF);
-        mac3.clamp(0, 0xFF) as u32
+        let b = mac3 >> 4;
+        self.set_flag(Flag::ColBSat, (b as u32) > 0xFF);
+        b.clamp(0, 0xFF) as u32
     }
 
     /// Extract RGB from mac1,2,3 and push to stack.
@@ -620,17 +623,17 @@ impl GTE {
         let mac1 = {
             let r = ((rgbc >> 16) & 0xFF) as i64;
             let ir1 = self.set_ir1(mac1, ir_unsigned);
-            self.set_mac1(ir1 * r, shift)
+            self.set_mac1((ir1 * r) << 4, shift)
         };
         let mac2 = {
             let g = ((rgbc >> 8) & 0xFF) as i64;
             let ir2 = self.set_ir2(mac2, ir_unsigned);
-            self.set_mac2(ir2 * g, shift)
+            self.set_mac2((ir2 * g) << 4, shift)
         };
         let mac3 = {
             let b = (rgbc & 0xFF) as i64;
             let ir3 = self.set_ir3(mac3, ir_unsigned);
-            self.set_mac3(ir3 * b, shift)
+            self.set_mac3((ir3 * b) << 4, shift)
         };
         self.push_mac_color(ir_unsigned, rgbc, mac1, mac2, mac3);
     }
@@ -642,17 +645,17 @@ impl GTE {
         let ir0 = self.get_reg_i16_lo(IR0) as i64;
         let r = {
             let r = ((rgbc >> 16) & 0xFF) as i64;
-            let mac1 = self.set_mac1(ir1 * r, 0) as i64; // TODO: shift left by 4?
+            let mac1 = self.set_mac1((ir1 * r) << 4, 0) as i64;
             self.rfc_interpolate(shift, ir_unsigned, mac1, ir0)
         };
         let g = {
             let g = ((rgbc >> 8) & 0xFF) as i64;
-            let mac2 = self.set_mac2(ir2 * g, 0) as i64; // TODO: shift left by 4?
+            let mac2 = self.set_mac2((ir2 * g) << 4, 0) as i64;
             self.gfc_interpolate(shift, ir_unsigned, mac2, ir0)
         };
         let b = {
             let b = (rgbc & 0xFF) as i64;
-            let mac3 = self.set_mac3(ir3 * b, 0) as i64; // TODO: shift left by 4?
+            let mac3 = self.set_mac3((ir3 * b) << 4, 0) as i64;
             self.bfc_interpolate(shift, ir_unsigned, mac3, ir0)
         };
         self.push_color(rgbc, r, g, b);

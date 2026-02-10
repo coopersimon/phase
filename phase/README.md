@@ -8,8 +8,8 @@ Below is a list of selected games and their status.
 
 - Castlevania: Symphony of the Night: If left for a long time, plays Konami title then locks up.
 - Chrono Trigger: Intro video plays, then crashes writing to VRAM.
-- Crash Bandicoot: Mostly ok, lighting on certain things looks totally wrong.
-- Crash Bandicoot 2: Mostly ok
+- Crash Bandicoot: Mostly ok
+- Crash Bandicoot 2: Mostly ok, frame rate issues
 - Crash Bandicoot 3: Now breaks due to peripheral issue.
 - Crash Team Racing: Locks up after displaying (broken) title screen
 - Dragon Warrior 7: Mostly ok, some perf issues
