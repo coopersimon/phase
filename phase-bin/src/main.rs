@@ -30,7 +30,10 @@ struct Args {
     game: Option<String>,
 
     #[arg(short = 'c', long)]
-    memcard: Option<String>,
+    memcard1: Option<String>,
+
+    #[arg(long)]
+    memcard2: Option<String>,
 
     #[arg(short, long)]
     mute: bool,
@@ -44,9 +47,11 @@ fn main() {
     };
     let mut playstation = PlayStation::new(config);
     let game_disc = args.game.map(|s| s.try_into().expect("invalid path"));
-    let memcard = args.memcard.map(|s| s.try_into().expect("invalid path"));
-    if let Some(memcard) = memcard {
-        playstation.insert_mem_card(memcard, Port::One);
+    if let Some(memcard) = args.memcard1 {
+        playstation.insert_mem_card(memcard.try_into().expect("invalid memcard path"), Port::One);
+    }
+    if let Some(memcard2) = args.memcard2 {
+        playstation.insert_mem_card(memcard2.try_into().expect("invalid memcard2 path"), Port::Two);
     }
 
     if args.debug {

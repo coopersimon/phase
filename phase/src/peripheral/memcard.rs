@@ -38,6 +38,7 @@ impl MemoryCard {
     pub fn new(path: &Path) -> std::io::Result<Self> {
         let mut buffer = vec![0; MEM_CARD_SIZE];
         let (file, dirty) = if std::fs::exists(path)? {
+            println!("Existing memory card found at {}", path.to_str().unwrap());
             let mut file = File::options()
                 .read(true)
                 .write(true)
@@ -45,6 +46,8 @@ impl MemoryCard {
             file.read_exact(&mut buffer)?;
             (file, false)
         } else {
+            println!("Create new memory card at {}", path.to_str().unwrap());
+            format_new_memcard_data(&mut buffer);
             let file = File::options()
                 .read(true)
                 .write(true)
@@ -269,5 +272,28 @@ impl MemoryCard {
 
     fn read_checksum(&mut self) -> u8 {
         self.checksum
+    }
+}
+
+/// Create a new formatted memory card buffer.
+fn format_new_memcard_data(data: &mut [u8]) {
+    data[0x00] = 0x4D; // 'M'
+    data[0x01] = 0x43; // 'C'
+    data[0x7F] = 0x0E; // Checksum
+    for i in 1..16 {
+        let sector_base_addr = i * 0x80;
+        data[sector_base_addr + 0x00] = 0xA0;
+        data[sector_base_addr + 0x08] = 0xFF;
+        data[sector_base_addr + 0x09] = 0xFF;
+        data[sector_base_addr + 0x7F] = 0xA0;
+    }
+    for i in 16..35 {
+        let sector_base_addr = i * 0x80;
+        data[sector_base_addr + 0x00] = 0xFF;
+        data[sector_base_addr + 0x01] = 0xFF;
+        data[sector_base_addr + 0x02] = 0xFF;
+        data[sector_base_addr + 0x03] = 0xFF;
+        data[sector_base_addr + 0x08] = 0xFF;
+        data[sector_base_addr + 0x09] = 0xFF;
     }
 }
