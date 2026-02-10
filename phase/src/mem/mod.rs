@@ -152,6 +152,7 @@ impl MemBus {
     fn begin_frame(&mut self) {
         // Sync up with the GPU.
         self.gpu.get_frame();
+        self.peripheral.flush_mem_cards();
         let input = self.io.send_frame();
         for message in input {
             use InputMessage::*;
@@ -174,6 +175,14 @@ impl MemBus {
                 },
                 ControllerInput { port, state } => {
                     self.peripheral.set_controller_state(port, state);
+                },
+                MemCardInserted { port, path } => {
+                    println!("Memory Card inserted to port {:?}: {:?}", port, path.to_str());
+                    self.peripheral.insert_mem_card(port, &path).expect("error inserting mem card");
+                },
+                MemCardRemoved { port } => {
+                    println!("Memory Card removed from port {:?}", port);
+                    self.peripheral.remove_mem_card(port);
                 },
             }
         }

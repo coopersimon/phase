@@ -131,6 +131,14 @@ impl PlayStation {
     pub fn remove_cd(&mut self) {
         self.input.push(io::InputMessage::CDRemoved);
     }
+
+    pub fn insert_mem_card(&mut self, path: PathBuf, port: Port) {
+        self.input.push(io::InputMessage::MemCardInserted { port, path });
+    }
+
+    pub fn remove_mem_card(&mut self, port: Port) {
+        self.input.push(io::InputMessage::MemCardRemoved { port });
+    }
 }
 
 /// Information for frame.

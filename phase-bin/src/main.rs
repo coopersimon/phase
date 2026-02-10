@@ -29,6 +29,9 @@ struct Args {
     #[arg(short, long)]
     game: Option<String>,
 
+    #[arg(short = 'c', long)]
+    memcard: Option<String>,
+
     #[arg(short, long)]
     mute: bool,
 }
@@ -39,8 +42,12 @@ fn main() {
     let config = PlayStationConfig {
         bios_path: PathBuf::from(args.bios)
     };
-    let playstation = PlayStation::new(config);
+    let mut playstation = PlayStation::new(config);
     let game_disc = args.game.map(|s| s.try_into().expect("invalid path"));
+    let memcard = args.memcard.map(|s| s.try_into().expect("invalid path"));
+    if let Some(memcard) = memcard {
+        playstation.insert_mem_card(memcard, Port::One);
+    }
 
     if args.debug {
         debug::debug_mode(playstation.make_debugger());

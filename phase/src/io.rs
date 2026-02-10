@@ -96,4 +96,11 @@ pub enum InputMessage {
         port: Port,
         state: crate::peripheral::controller::ControllerState,
     },
+    MemCardInserted {
+        port: Port,
+        path: PathBuf,
+    },
+    MemCardRemoved {
+        port: Port,
+    }
 }

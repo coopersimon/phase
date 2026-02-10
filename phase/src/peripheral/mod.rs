@@ -1,14 +1,15 @@
 pub mod controller;
+mod memcard;
 
 use std::collections::VecDeque;
+use std::path::Path;
 
 use crate::{
-    Port,
-    interrupt::Interrupt,
-    utils::{bits::*, interface::MemInterface}
+    Port, interrupt::Interrupt, utils::{bits::*, interface::MemInterface}
 };
 
 use controller::ControllerState;
+use memcard::*;
 
 /// Handles the controllers and memory cards.
 pub struct PeripheralPort {
@@ -23,11 +24,14 @@ pub struct PeripheralPort {
     out_fifo: VecDeque<u8>,
     transfer_mode: TransferMode,
     transfer_active: bool,
-    irq_countdown: usize,
+    irq_latch: bool,
 
     // Devices:
     port_1_controller: ControllerData,
     port_2_controller: ControllerData,
+
+    port_1_mem_card: Option<MemoryCard>,
+    port_2_mem_card: Option<MemoryCard>,
 }
 
 impl PeripheralPort {
@@ -44,10 +48,13 @@ impl PeripheralPort {
             out_fifo: VecDeque::new(),
             transfer_mode: TransferMode::None,
             transfer_active: false,
-            irq_countdown: 0,
+            irq_latch: false,
 
             port_1_controller: ControllerData::new(),
             port_2_controller: ControllerData::new(),
+
+            port_1_mem_card: None,
+            port_2_mem_card: None,
         }
     }
 
@@ -62,15 +69,9 @@ impl PeripheralPort {
             self.baudrate_timer -= clocks;
         }
 
-        if self.irq_countdown > 0 {
-            self.irq_countdown = self.irq_countdown.saturating_sub(cycles);
-            if self.irq_countdown == 0 {
-                self.status.remove(JoypadStatus::AckInputLevel); // ?
-                self.status.insert(JoypadStatus::IRQ);
-                Interrupt::Peripheral
-            } else {
-                Interrupt::empty()
-            }
+        if self.irq_latch {
+            self.irq_latch = false;
+            Interrupt::Peripheral
         } else {
             Interrupt::empty()
         }
@@ -87,6 +88,30 @@ impl PeripheralPort {
         match port {
             Port::One => self.port_1_controller.output_data.fill(0xFFFF),// TODO: analog = 0?
             Port::Two => self.port_1_controller.output_data.fill(0xFFFF),// TODO: analog = 0?
+        }
+    }
+
+    pub fn insert_mem_card(&mut self, port: Port, path: &Path) -> std::io::Result<()> {
+        match port {
+            Port::One => self.port_1_mem_card = Some(MemoryCard::new(path)?),
+            Port::Two => self.port_2_mem_card = Some(MemoryCard::new(path)?),
+        }
+        Ok(())
+    }
+
+    pub fn remove_mem_card(&mut self, port: Port) {
+        match port {
+            Port::One => self.port_1_mem_card = None,
+            Port::Two => self.port_2_mem_card = None,
+        }
+    }
+
+    pub fn flush_mem_cards(&mut self) {
+        if let Some(mem_card) = self.port_1_mem_card.as_mut() {
+            mem_card.flush();
+        }
+        if let Some(mem_card) = self.port_2_mem_card.as_mut() {
+            mem_card.flush();
         }
     }
 }
@@ -209,7 +234,7 @@ enum TransferMode {
     None,
     Controller(u8),
     Multitap(u8),
-    MemCard(u8),
+    MemCard,
 }
 
 // Internal
@@ -231,8 +256,9 @@ impl PeripheralPort {
         ])
     }
 
-    fn read_status(&self) -> u32 {
+    fn read_status(&mut self) -> u32 {
         let mut status = self.status;
+        self.status.remove(JoypadStatus::AckInputLevel);
         if !self.out_fifo.is_empty() {
             status.insert(JoypadStatus::RXFifoNotEmpty);
         }
@@ -263,6 +289,19 @@ impl PeripheralPort {
             if control.contains(JoypadControl::TXIntEnable) {
                 // TODO: ?
                 self.trigger_irq();
+            }
+        } else {
+            // Cancel ongoing transfer.
+            self.transfer_active = false;
+            self.status.remove(JoypadStatus::TXReady1);
+            self.transfer_mode = TransferMode::None;
+            self.in_fifo.clear();
+            self.out_fifo.clear();
+            if let Some(mem_card) = self.port_1_mem_card.as_mut() {
+                mem_card.cancel_transfer();
+            }
+            if let Some(mem_card) = self.port_2_mem_card.as_mut() {
+                mem_card.cancel_transfer();
             }
         }
     }
@@ -296,7 +335,7 @@ impl PeripheralPort {
             panic!("no data to process");
             return;
         };
-        //println!("Peripheral in: {:X} (state: {:?})", data_in, self.transfer_mode);
+        //println!("Peripheral in: {:X} (state: {:?}) (port 2: {})", data_in, self.transfer_mode, self.control.contains(JoypadControl::SlotSelect));
         self.transfer_active = !self.in_fifo.is_empty();
         match self.transfer_mode {
             TransferMode::None => {
@@ -304,7 +343,7 @@ impl PeripheralPort {
                     self.transfer_mode = TransferMode::Controller(0);
                     self.push_data(0xFF);
                 } else if data_in == 0x81 {
-                    self.transfer_mode = TransferMode::MemCard(0);
+                    self.transfer_mode = TransferMode::MemCard;
                     self.push_data(0xFF);
                 } else {
                     panic!("unrecognised peripheral data {:X}", data_in);
@@ -330,31 +369,14 @@ impl PeripheralPort {
                 self.transfer_mode = transfer_mode;
                 self.push_data(data);
             },
-            TransferMode::MemCard(n) => {
-                match n {
-                    0 => { // Flag
-                        self.transfer_mode = TransferMode::MemCard(1);
-                        self.push_data(0xFF);
-                    },
-                    1 => {
-                        self.transfer_mode = TransferMode::MemCard(2);
-                        self.push_data(0xFF);
-                    },
-                    2 => {
-                        self.transfer_mode = TransferMode::None;
-                        self.push_data(0xFF);
-                    },
-                    _ => unreachable!()
-                }
-            }
+            TransferMode::MemCard => self.process_memcard_mode(data_in),
         }
-        if self.transfer_mode != TransferMode::None {
-            self.status.insert(JoypadStatus::AckInputLevel);
-            if self.control.contains(JoypadControl::AckIntEnable) {
-                self.trigger_irq();
-            }
-        } else {
+        if self.transfer_mode == TransferMode::None {
             self.status.insert(JoypadStatus::TXReady2);
+        }
+        self.status.insert(JoypadStatus::AckInputLevel);
+        if self.control.contains(JoypadControl::AckIntEnable) {
+            self.trigger_irq();
         }
     }
 
@@ -494,6 +516,25 @@ impl PeripheralPort {
         self.push_data(data);
     }
 
+    fn process_memcard_mode(&mut self, data_in: u8) {
+        let mem_card = if self.control.contains(JoypadControl::SlotSelect) {
+            &mut self.port_2_mem_card
+        } else {
+            &mut self.port_1_mem_card
+        };
+        let data = if let Some(mem_card) = mem_card.as_mut() {
+            let data = mem_card.transfer_data(data_in);
+            if mem_card.transfer_complete() {
+                self.transfer_mode = TransferMode::None;
+            }
+            data
+        } else {
+            // Eventually the system should cancel the transfer.
+            0xFF
+        };
+        self.push_data(data);
+    }
+
     fn push_data(&mut self, data: u8) {
         //if self.control.contains(JoypadControl::RXEnable) {
             self.out_fifo.push_back(data);
@@ -508,7 +549,8 @@ impl PeripheralPort {
     }
 
     fn trigger_irq(&mut self) {
-        self.irq_countdown = 100;
+        self.irq_latch = true;
+        self.status.insert(JoypadStatus::IRQ);
     }
 }
 
