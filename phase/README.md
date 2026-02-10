@@ -6,11 +6,14 @@ This is a PlayStation emulator. It is in development. It does software rendering
 
 Below is a list of selected games and their status.
 
+- Ape Escape: Requires dualshock
+- Boku no Natsuyasumi: Doesn't boot
 - Castlevania: Symphony of the Night: If left for a long time, plays Konami title then locks up.
+- Chrono Cross: VRAM out of bounds access
 - Chrono Trigger: Intro video plays, then crashes writing to VRAM.
 - Crash Bandicoot: Mostly ok
 - Crash Bandicoot 2: Mostly ok, frame rate issues
-- Crash Bandicoot 3: Now breaks due to peripheral issue.
+- Crash Bandicoot 3: Mostly ok, frame rate issues
 - Crash Team Racing: Locks up after displaying (broken) title screen
 - Dragon Warrior 7: Mostly ok, some perf issues
 - Final Fantasy 7: Startup ok, gameplay looks quite broken.
@@ -22,6 +25,8 @@ Below is a list of selected games and their status.
 - Metal Gear Solid: Waiting for SPU interrupt? Shows a few titles then locks up.
 - Resident Evil: Write VRAM block out of bounds (might require wrapping)
 - Resident Evil 2: Mostly OK, intro cutscene is a bit broken if not skipped. Intro video is OK. gameplay seems OK
+- Silent Hill: Uses multitap memcard then locks up
+- Spyro the Dragon: Lots of completely broken textures, sound in intro cutscene doesn't play
 - Suikoden: Pretty good, issues with some clipped backgrounds/sprites behaving oddly at the top and left (they are getting shifted, not clipped)
 - Tekken 3: Mostly ok!
 - Tony Hawk's Pro Skater 2: Shows some video then locks up (copy protection?) (got a bit further than before?)
@@ -32,8 +37,14 @@ Below is a list of selected games and their status.
 
 ### Core
 
-- Memory cards
 - Analog controllers
+- Sound:
+  - Reverb
+  - Missing CD Audio
+- Graphics fixes:
+  - Texture mapping
+  - Interpolation
+  - And more...
 
 ### Other
 
@@ -42,3 +53,4 @@ Below is a list of selected games and their status.
 - Save states
 - Cache emulation
 - PAL support
+- External controller support

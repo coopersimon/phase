@@ -25,6 +25,7 @@ pub struct PeripheralPort {
     transfer_mode: TransferMode,
     transfer_active: bool,
     irq_latch: bool,
+    multitap_mem_card: bool,
 
     // Devices:
     port_1_controller: ControllerData,
@@ -49,6 +50,7 @@ impl PeripheralPort {
             transfer_mode: TransferMode::None,
             transfer_active: false,
             irq_latch: false,
+            multitap_mem_card: false,
 
             port_1_controller: ControllerData::new(),
             port_2_controller: ControllerData::new(),
@@ -339,11 +341,19 @@ impl PeripheralPort {
         self.transfer_active = !self.in_fifo.is_empty();
         match self.transfer_mode {
             TransferMode::None => {
+                self.multitap_mem_card = false;
                 if data_in == 0x01 {
                     self.transfer_mode = TransferMode::Controller(0);
                     self.push_data(0xFF);
                 } else if data_in == 0x81 {
                     self.transfer_mode = TransferMode::MemCard;
+                    self.push_data(0xFF);
+                } else if data_in & 0xF0 == 0x80 {
+                    self.multitap_mem_card = true;
+                    self.transfer_mode = TransferMode::MemCard;
+                    self.push_data(0xFF);
+                } else if data_in == 0x00 {
+                    // ...
                     self.push_data(0xFF);
                 } else {
                     panic!("unrecognised peripheral data {:X}", data_in);
@@ -517,12 +527,14 @@ impl PeripheralPort {
     }
 
     fn process_memcard_mode(&mut self, data_in: u8) {
-        let mem_card = if self.control.contains(JoypadControl::SlotSelect) {
-            &mut self.port_2_mem_card
+        let mem_card = if self.multitap_mem_card {
+            None
+        } else if self.control.contains(JoypadControl::SlotSelect) {
+            self.port_2_mem_card.as_mut()
         } else {
-            &mut self.port_1_mem_card
+            self.port_1_mem_card.as_mut()
         };
-        let data = if let Some(mem_card) = mem_card.as_mut() {
+        let data = if let Some(mem_card) = mem_card {
             let data = mem_card.transfer_data(data_in);
             if mem_card.transfer_complete() {
                 self.transfer_mode = TransferMode::None;
