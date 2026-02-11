@@ -110,16 +110,41 @@ impl RendererImpl for SoftwareRenderer {
         }
     }
     fn write_vram_block(&mut self, data_in: &[u16], to: Coord, size: Size) {
-        for y in 0..size.height {
-            let src_begin = (y * size.width) as usize;
-            let src_end = src_begin + (size.width as usize);
-            let dst_begin = Coord {x: to.x, y: to.y + y as i16}.get_vram_idx();
-            let dst_end = dst_begin + (size.width as usize);
-            let dest = &mut self.vram[dst_begin..dst_end];
-            dest.copy_from_slice(&data_in[src_begin..src_end]);
+        let x_end = to.x + size.width as i16;
+        if x_end > 1024 {
+            // Wrap left-right.
+            for y in 0..size.height {
+                let first_block_size = 1024 - (to.x as usize);
+                let src_begin = (y * size.width) as usize;
+                let src_end = src_begin + first_block_size;
+                let dst_begin = Coord {x: to.x, y: to.y + y as i16}.get_vram_idx();
+                let dst_end = dst_begin + first_block_size;
+                let dest = &mut self.vram[dst_begin..dst_end];
+                dest.copy_from_slice(&data_in[src_begin..src_end]);
+
+                let second_block_size = (size.width as usize) - first_block_size;
+                let src_begin = src_end;
+                let src_end = src_begin + second_block_size;
+                let dst_begin = Coord {x: 0, y: to.y + y as i16}.get_vram_idx();
+                let dst_end = dst_begin + second_block_size;
+                let dest = &mut self.vram[dst_begin..dst_end];
+                dest.copy_from_slice(&data_in[src_begin..src_end]);
+            }
+        } else {
+            for y in 0..size.height {
+                let src_begin = (y * size.width) as usize;
+                let src_end = src_begin + (size.width as usize);
+                let dst_begin = Coord {x: to.x, y: to.y + y as i16}.get_vram_idx();
+                let dst_end = dst_begin + (size.width as usize);
+                let dest = &mut self.vram[dst_begin..dst_end];
+                dest.copy_from_slice(&data_in[src_begin..src_end]);
+            }
         }
     }
     fn read_vram_block(&mut self, data_out: &mut [u16], from: Coord, size: Size) {
+        if from.x + size.width as i16 > 1024 {
+            panic!("copy {:X} from {:X}", size.width, from.x);
+        }
         for y in 0..size.height {
             let dst_begin = (y * size.width) as usize;
             let dst_end = dst_begin + (size.width as usize);
@@ -130,6 +155,9 @@ impl RendererImpl for SoftwareRenderer {
         }
     }
     fn copy_vram_block(&mut self, from: Coord, to: Coord, size: Size) {
+        if from.x + size.width as i16 > 1024 || to.x + size.width as i16 > 1024 {
+            panic!("copy {:X} from {:X} to {:X}", size.width, from.x, to.x);
+        }
         for line in 0..size.height {
             let src_begin = Coord {x: from.x, y: from.y + line as i16}.get_vram_idx();
             let src_end = src_begin + (size.width as usize);
@@ -244,14 +272,19 @@ impl RendererImpl for SoftwareRenderer {
         let y_max = bottom.min(self.drawing_area.bottom);
         let x_min = left.max(self.drawing_area.left);
         let x_max = right.min(self.drawing_area.right);
-        let mut current_tex_coord = tex_coord;
-        // TODO: this offsetting is a bit clunky...
-        if left < 0 {
-            current_tex_coord.s += (-left) as u8;
-        }
-        if top < 0 {
-            current_tex_coord.t += (-top) as u8;
-        }
+        let start_coord = TexCoord {
+            s: if left < 0 {
+                ((tex_coord.s as u16 as i16) - left) as u8
+            } else {
+                tex_coord.s
+            },
+            t: if top < 0 {
+                ((tex_coord.t as u16 as i16) - top) as u8
+            } else {
+                tex_coord.t
+            },
+        };
+        let mut current_tex_coord = start_coord;
         for y in y_min..y_max {
             let line_addr = (y as usize) * 1024;
             for x in x_min..x_max {
@@ -265,7 +298,7 @@ impl RendererImpl for SoftwareRenderer {
                 current_tex_coord.s += 1;
             }
             current_tex_coord.t += 1;
-            current_tex_coord.s = tex_coord.s;
+            current_tex_coord.s = start_coord.s;
         }
     }
 
@@ -347,7 +380,7 @@ impl SoftwareRenderer {
     fn rasterize_triangle<F: Fn(&mut Self, &Line, usize)>(&mut self, vertices: &[Vertex], raster_f: F) {
         let mut min_y = std::i16::MAX;
         let mut max_y = std::i16::MIN;
-        //println!("Draw triangle:");
+        //println!("Draw triangle: offset: ({}, {}) bounds: ({},{}) => ({},{})", self.draw_offset.x, self.draw_offset.y, self.drawing_area.left, self.drawing_area.top, self.drawing_area.right, self.drawing_area.bottom);
         for v in vertices {
             //println!("  {}, {} TEX: {}, {}", v.coord.x, v.coord.y, v.tex.s, v.tex.t);
             min_y = min_y.min(v.coord.y);
@@ -388,12 +421,6 @@ impl SoftwareRenderer {
             let right = lines.right.get_x() + self.draw_offset.x;
             let min_x = left.max(self.drawing_area.left);
             let max_x = right.min(self.drawing_area.right);
-            /*if lines.left.get_x() < 0 && lines.right.get_x() < 0 {
-                println!("drawing {}->{} (offset: {}->{}, clipped: {}->{})", lines.left.get_x(), lines.right.get_x(), left, right, min_x, max_x);
-            }
-            else if lines.left.get_x() < 0 && lines.right.get_x() >= 0 {
-                println!("drawinf {}->{} (offset: {}->{}, clipped: {}->{})", lines.left.get_x(), lines.right.get_x(), left, right, min_x, max_x);
-            }*/
             if lines.left.get_x() != lines.right.get_x() {
                 let line_addr = (y as usize) * 1024;
                 let mut line = Line::from_lines(&lines.left, &lines.right, lines.left.get_x());

@@ -558,7 +558,8 @@ impl Renderer {
     }
 
     fn blit_cpu_to_vram(&mut self) {
-        let dest = Coord::from_xy(self.get_parameter());
+        // Mask to ensure within bounds
+        let dest = Coord::from_xy(self.get_parameter() & 0x01FF_03FF);
         let size = Size::from_xy(self.get_parameter());
         let data_words = size.word_count();
         self.staging_buffer.clear();
