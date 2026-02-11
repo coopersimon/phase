@@ -37,6 +37,8 @@ const SECTOR_DATA: u64 = 2048;
 const COMMAND_CYCLES: usize = 24000;
 /// 1x read cycles
 const READ_CYCLES: usize = 451584;
+/// Varies in reality, just an arbitrary amount here.
+const SEEK_CYCLES: usize = 300000;
 
 /// CD-ROM reader.
 pub struct CDROM {
@@ -59,7 +61,11 @@ pub struct CDROM {
     drive_status: DriveStatus,
     mode: DriveMode,
     loc: DriveLoc,
-    seeked: bool,
+    /// Determines if we have done setloc,
+    /// and are pending a seek or read operation.
+    pending_seek: bool,
+    /// Determines if we are in seek mode.
+    seeking: bool,
     read_data_counter: usize,
     current_sector_header: SectorHeader,
 
@@ -92,7 +98,8 @@ impl CDROM {
             drive_status: DriveStatus::empty(),
             mode: DriveMode::empty(),
             loc: DriveLoc { minute: 0, second: 0, sector: 0 },
-            seeked: false,
+            pending_seek: false,
+            seeking: false,
             read_data_counter: 0,
             current_sector_header: SectorHeader::default(),
 
@@ -133,10 +140,17 @@ impl CDROM {
         if self.read_data_counter > 0 {
             self.read_data_counter = self.read_data_counter.saturating_sub(cycles);
             if self.read_data_counter == 0 {
-                self.status.remove(Status::ADPBusy); //?
-                if self.read_sector() {
-                    self.send_response(self.drive_status.bits(), 1);
+                if self.seeking {
+                    self.drive_status.remove(DriveStatus::ReadBits);
+                    self.drive_status.insert(DriveStatus::Reading);
+                    self.read_data_counter = self.get_read_cycles();
+                    self.seeking = false;
+                } else {
+                    if self.read_sector() {
+                        self.send_response(self.drive_status.bits(), 1);
+                    }
                 }
+                self.status.remove(Status::ADPBusy); //?
             }
         }
         if self.check_irq() {
@@ -383,7 +397,14 @@ impl CDROM {
 
     /// Indicate first response has been sent.
     fn first_response(&mut self) -> DriveResult<()> {
-        self.counter = COMMAND_CYCLES; // TODO: increase this if seeking/pausing
+        self.counter = COMMAND_CYCLES;
+        self.response_count += 1;
+        Ok(())
+    }
+
+    /// Indicate first response has been sent for a seeking or pausing command.
+    fn begin_seek(&mut self) -> DriveResult<()> {
+        self.counter = SEEK_CYCLES;
         self.response_count += 1;
         Ok(())
     }
@@ -404,6 +425,10 @@ impl CDROM {
             self.status.remove(Status::DataFifoNotEmpty);
         }
         data
+    }
+
+    fn get_read_cycles(&self) -> usize {
+        if self.mode.contains(DriveMode::Speed) {READ_CYCLES / 2} else {READ_CYCLES}
     }
 
     /// Read a sector.
@@ -431,7 +456,7 @@ impl CDROM {
             true
         };
         // Begin count down for the next read.
-        self.read_data_counter = if self.mode.contains(DriveMode::Speed) {READ_CYCLES / 2} else {READ_CYCLES};
+        self.read_data_counter = self.get_read_cycles();
         self.seek_file_offset += SECTOR_SIZE;
         trigger_int_1
     }
@@ -612,9 +637,9 @@ bitflags::bitflags! {
 /// The final 4 bytes are duplicated.
 #[derive(Clone, Default)]
 struct SectorHeader {
-    minute:  u8,
-    second:  u8,
-    sector:  u8,
+    minute:  u8, // Stored as BCD.
+    second:  u8, // Stored as BCD.
+    sector:  u8, // Stored as BCD.
     mode:    u8,
     // Subheader:
     file:    u8,
@@ -683,20 +708,21 @@ impl CDROM {
     }
 
     fn motor_on(&mut self) -> DriveResult<()> {
-        if self.drive_status.contains(DriveStatus::SpindleMotor) {
+        // This should return an error as follows.
+        // However certain games (Chrono Cross) call this command after init.
+        /*if self.drive_status.contains(DriveStatus::SpindleMotor) {
             self.drive_status.insert(DriveStatus::Error);
-            Err(DriveError::MissingParam)
-        } else {
-            match self.response_count {
-                0 => {
-                    self.send_response(self.drive_status.bits(), 3);
-                    self.first_response()
-                },
-                _ => {
-                    self.drive_status.insert(DriveStatus::SpindleMotor);
-                    self.send_response(self.drive_status.bits(), 2);
-                    self.command_complete()
-                }
+            return Err(DriveError::MissingParam);
+        }*/
+        match self.response_count {
+            0 => {
+                self.send_response(self.drive_status.bits(), 3);
+                self.first_response()
+            },
+            _ => {
+                self.drive_status.insert(DriveStatus::SpindleMotor);
+                self.send_response(self.drive_status.bits(), 2);
+                self.command_complete()
             }
         }
     }
@@ -722,7 +748,7 @@ impl CDROM {
             0 => {
                 self.send_response(self.drive_status.bits(), 3);
                 self.read_data_counter = 0;
-                self.first_response()
+                self.begin_seek()
             },
             _ => {
                 self.drive_status.remove(DriveStatus::ReadBits);
@@ -737,7 +763,7 @@ impl CDROM {
         self.loc.second = from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?; // ss
         self.loc.sector = from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?; // sector / frame
         println!("Seek to {:X},{:X},{:X}", self.loc.minute, self.loc.second, self.loc.sector);
-        self.seeked = false;
+        self.pending_seek = true;
         self.send_response(self.drive_status.bits(), 3);
         self.command_complete()
     }
@@ -746,16 +772,18 @@ impl CDROM {
     fn seek_l(&mut self) -> DriveResult<()> {
         match self.response_count {
             0 => {
-                self.read_data_counter = 0;
+                self.pending_seek = false;
+                self.seeking = true;
                 self.drive_status.remove(DriveStatus::ReadBits);
                 self.drive_status.insert(DriveStatus::Seeking);
                 self.drive_status.insert(DriveStatus::SpindleMotor);
                 self.send_response(self.drive_status.bits(), 3);
-                self.first_response()
+                self.begin_seek()
             },
             _ => {
                 self.seek_file_offset = self.loc.byte_offset();
-                self.seeked = true;
+                self.seeking = false;
+                self.drive_status.remove(DriveStatus::ReadBits);
                 self.send_response(self.drive_status.bits(), 2);
                 self.command_complete()
             }
@@ -764,6 +792,7 @@ impl CDROM {
 
     /// Audio seek
     fn seek_p(&mut self) -> DriveResult<()> {
+        //self.seek_l()
         unimplemented!("audio seek");
         /*self.drive_status.remove(DriveStatus::ReadBits);
         self.drive_status.insert(DriveStatus::Seeking);
@@ -793,15 +822,18 @@ impl CDROM {
 
     /// Read with retry
     fn read_n(&mut self) -> DriveResult<()> {
-        if !self.seeked {
-            // TODO: set seek bits and wait?
-            // or at least add on extra wait cycles.
-            self.seek_file_offset = self.loc.byte_offset();
-            self.seeked = true;
-        }
         self.drive_status.remove(DriveStatus::ReadBits);
-        self.drive_status.insert(DriveStatus::Reading);
-        self.read_data_counter = if self.mode.contains(DriveMode::Speed) {READ_CYCLES / 2} else {READ_CYCLES};
+        if self.pending_seek {
+            self.seek_file_offset = self.loc.byte_offset();
+            self.pending_seek = false;
+            self.seeking = true;
+            self.drive_status.insert(DriveStatus::Seeking);
+            self.read_data_counter = SEEK_CYCLES;
+        } else {
+            self.seeking = false;
+            self.drive_status.insert(DriveStatus::Reading);
+            self.read_data_counter = self.get_read_cycles();
+        }
         self.send_response(self.drive_status.bits(), 3);
         self.command_complete()
     }
@@ -813,8 +845,7 @@ impl CDROM {
 
     /// Read table of contents
     fn read_toc(&mut self) -> DriveResult<()> {
-        unimplemented!("TOC");
-        // TODO: .cue file?
+        // This doesn't return anything interesting.
         match self.response_count {
             0 => {
                 self.send_response(self.drive_status.bits(), 3);
@@ -828,6 +859,7 @@ impl CDROM {
     }
 
     fn get_stat(&mut self) -> DriveResult<()> {
+        println!("get stat: {:X}", self.drive_status.bits());
         self.send_response(self.drive_status.bits(), 3);
         self.drive_status.remove(DriveStatus::ShellOpen);
         self.command_complete()
@@ -873,6 +905,7 @@ impl CDROM {
         // Assume 1 track. (TODO: read .cue files)
         let first_track = to_bcd(1).unwrap();
         let last_track = to_bcd(1).unwrap();
+        println!("get TN {:X} => {:X}", first_track, last_track);
         self.send_response(self.drive_status.bits(), 3);
         self.send_response(first_track, 3);
         self.send_response(last_track, 3);
@@ -883,7 +916,7 @@ impl CDROM {
     fn get_td(&mut self) -> DriveResult<()> {
         // Assume 1 track. (TODO: read .cue files)
         let track = from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?;
-        println!("get TD {}", track);
+        println!("get TD {:X}", track);
         match track {
             0 => { // End of last track.
                 let loc = self.get_final_sector()?;
@@ -926,7 +959,7 @@ impl CDROM {
                     self.send_response(0x53, 2); // S
                     self.send_response(0x43, 2); // C
                     self.send_response(0x45, 2); // E
-                    self.send_response(0x41, 2); // [Region: A/E/I] TODO: set based on disc.
+                    self.send_response(0x41, 2); // [Region: A/E/I] TODO: set based on disc. (41, 45, 49)
                 } else {
                     self.send_response(0x08, 5); // Stat?
                     self.send_response(0x40, 5); // Flags
