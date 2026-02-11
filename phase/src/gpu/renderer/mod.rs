@@ -20,6 +20,9 @@ use software::SoftwareRenderer;
 
 const VRAM_SIZE: usize = 1024 * 1024;
 
+// TODO: make this configurable.
+const DEBUG_MODE: bool = false;
+
 pub enum RendererCmd {
     /// A command word sent via GP0.
     /// This could be a full or partial command,
@@ -111,7 +114,7 @@ impl Renderer {
     fn send_frame(&mut self, interlace_state: InterlaceState) {
         {
             let mut frame = self.frame.lock().unwrap();
-            self.renderer.get_frame(&mut frame, interlace_state, self.status.contains(GPUStatus::ColorDepth));
+            self.renderer.get_frame(&mut frame, interlace_state, self.status.contains(GPUStatus::ColorDepth), DEBUG_MODE);
         }
         let _ = self.frame_tx.send(());
     }
@@ -178,8 +181,11 @@ impl Renderer {
         self.update_status();
         let h_res = self.status.h_res();
         let v_res = self.status.v_res();
-        self.frame.lock().unwrap().resize((h_res, v_res));
-        //self.frame.lock().unwrap().resize((1024, 512));
+        if DEBUG_MODE {
+            self.frame.lock().unwrap().resize((1024, 512));
+        } else {
+            self.frame.lock().unwrap().resize((h_res, v_res));
+        }
         let interlace = self.status.contains(GPUStatus::Interlace);
         self.renderer.set_display_resolution(Size { width: h_res as u16, height: v_res as u16 }, interlace);
     }
@@ -206,24 +212,24 @@ impl Renderer {
 
             0x1F => self.irq(),
 
-            0x20 => self.draw_tri(data, false),
-            0x22 => self.draw_tri(data, true),
+            0x20 | 0x21 => self.draw_tri(data, false),
+            0x22 | 0x23 => self.draw_tri(data, true),
             0x24 => self.draw_textured_blended_tri(data, false),
             0x25 => self.draw_textured_tri(false),
             0x26 => self.draw_textured_blended_tri(data, true),
             0x27 => self.draw_textured_tri(true),
-            0x28 => self.draw_quad(data, false),
-            0x2A => self.draw_quad(data, true),
+            0x28 | 0x29 => self.draw_quad(data, false),
+            0x2A | 0x2B => self.draw_quad(data, true),
             0x2C => self.draw_textured_blended_quad(data, false),
             0x2D => self.draw_textured_quad(false),
             0x2E => self.draw_textured_blended_quad(data, true),
             0x2F => self.draw_textured_quad(true),
-            0x30 => self.draw_shaded_tri(data, false),
-            0x32 => self.draw_shaded_tri(data, true),
+            0x30 | 0x31 => self.draw_shaded_tri(data, false),
+            0x32 | 0x33 => self.draw_shaded_tri(data, true),
             0x34 => self.draw_textured_shaded_tri(data, false),
             0x36 => self.draw_textured_shaded_tri(data, true),
-            0x38 => self.draw_shaded_quad(data, false),
-            0x3A => self.draw_shaded_quad(data, true),
+            0x38 | 0x39 => self.draw_shaded_quad(data, false),
+            0x3A | 0x3B => self.draw_shaded_quad(data, true),
             0x3C => self.draw_textured_shaded_quad(data, false),
             0x3E => self.draw_textured_shaded_quad(data, true),
 
@@ -237,7 +243,7 @@ impl Renderer {
             0x5A => self.draw_shaded_poly_line(data, true),
 
             0x60 => self.draw_rectangle(data, false),
-            0x62 => self.draw_rectangle(data, true),
+            0x62 | 0x63 => self.draw_rectangle(data, true),
             0x64 => self.draw_tex_rectangle(Some(data), false),
             0x65 => self.draw_tex_rectangle(None, false),
             0x66 => self.draw_tex_rectangle(Some(data), true),
@@ -272,7 +278,7 @@ impl Renderer {
             0xE5 => self.set_draw_offset(data),
             0xE6 => self.mask_bit_setting(data),
 
-            _ => println!("Invalid GP0 command: {:X}", data),
+            _ => panic!("Invalid GP0 command: {:X}", data),
         }
         self.status.insert(GPUStatus::CommandReady);
         self.update_status();
@@ -551,16 +557,16 @@ impl Renderer {
     // Data copy
 
     fn blit_vram_to_vram(&mut self) {
-        let source = self.get_parameter();
-        let dest = self.get_parameter();
-        let size = self.get_parameter();
-        self.renderer.copy_vram_block(Coord::from_xy(source), Coord::from_xy(dest), Size::from_xy(size));
+        let source = Coord::from_xy(self.get_parameter()).copy_clip();
+        let dest = Coord::from_xy(self.get_parameter()).copy_clip();
+        let size = Size::from_xy(self.get_parameter()).copy_clip();
+        self.renderer.copy_vram_block(source, dest, size);
     }
 
     fn blit_cpu_to_vram(&mut self) {
         // Mask to ensure within bounds
-        let dest = Coord::from_xy(self.get_parameter() & 0x01FF_03FF);
-        let size = Size::from_xy(self.get_parameter());
+        let dest = Coord::from_xy(self.get_parameter()).copy_clip();
+        let size = Size::from_xy(self.get_parameter()).copy_clip();
         let data_words = size.word_count();
         self.staging_buffer.clear();
         //self.status.set_dma_recv();
@@ -576,8 +582,8 @@ impl Renderer {
     }
 
     fn blit_vram_to_cpu(&mut self) {
-        let source = Coord::from_xy(self.get_parameter());
-        let size = Size::from_xy(self.get_parameter());
+        let source = Coord::from_xy(self.get_parameter()).copy_clip();
+        let size = Size::from_xy(self.get_parameter()).copy_clip();
         let data_words = size.word_count() as usize;
         self.staging_buffer.resize(data_words * 2, 0);
         self.renderer.read_vram_block(&mut self.staging_buffer, source, size);
@@ -738,7 +744,9 @@ impl GPUStatus {
 trait RendererImpl {
     /// The frame provided should be of the correct resolution.
     /// It is of format BGRA U8.
-    fn get_frame(&mut self, frame: &mut Frame, interlace: InterlaceState, rgb24: bool);
+    /// 
+    /// "Debug" setting will draw the entire VRAM on-screen.
+    fn get_frame(&mut self, frame: &mut Frame, interlace: InterlaceState, rgb24: bool, debug: bool);
 
     fn write_vram_block(&mut self, data_in: &[u16], to: Coord, size: Size);
     fn read_vram_block(&mut self, data_out: &mut [u16], from: Coord, size: Size);
@@ -780,6 +788,14 @@ impl Coord {
         }
     }
 
+    #[inline(always)]
+    fn copy_clip(self) -> Self {
+        Self {
+            x: self.x & 0x3FF,
+            y: self.y & 0x1FF
+        }
+    }
+
     /// Get halfword index into VRAM.
     fn get_vram_idx(&self) -> usize {
         (self.x as usize) + (self.y as usize) * 1024
@@ -798,6 +814,14 @@ impl Size {
         Self {
             width: (xy & 0xFFFF) as u16,
             height: ((xy >> 16) & 0xFFFF) as u16,
+        }
+    }
+
+    #[inline(always)]
+    fn copy_clip(self) -> Self {
+        Self {
+            width: (self.width.wrapping_sub(1) & 0x3FF) + 1,
+            height: (self.height.wrapping_sub(1) & 0x3FF) + 1,
         }
     }
 

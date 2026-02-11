@@ -64,11 +64,14 @@ impl SoftwareRenderer {
 }
 
 impl RendererImpl for SoftwareRenderer {
-    fn get_frame(&mut self, frame: &mut Frame, _interlace_state: InterlaceState, rgb24: bool) {
-        if self.enable_display {
-            let line_size = (self.resolution.width as usize) * 4;
+    fn get_frame(&mut self, frame: &mut Frame, _interlace_state: InterlaceState, rgb24: bool, debug: bool) {
+        let width = if debug {1024} else {self.resolution.width as usize};
+        let height = if debug {512} else {
             let display_height = if self.interlace {self.display_height * 2} else {self.display_height};
-            let height = self.resolution.height.min(display_height) as usize;
+            self.resolution.height.min(display_height) as usize
+        };
+        if self.enable_display {
+            let line_size = width * 4;
             for y in 0..height {
                 // TODO: interlaced rendering makes a cool effect, but overflows memory sometimes
                 // for as of yet unknown reasons.
@@ -80,7 +83,10 @@ impl RendererImpl for SoftwareRenderer {
                 let mut frame_idx = y * line_size;
                 let mut vram_addr = Coord {x: self.frame_pos.x, y: self.frame_pos.y + (y as i16)}.get_vram_idx();
                 if rgb24 {
-                    for _ in 0..(self.resolution.width / 2) {
+                    if debug {
+                        vram_addr = y * (width / 2);
+                    }
+                    for _ in 0..(width / 2) {
                         let h0 = self.vram[vram_addr + 0];
                         let h1 = self.vram[vram_addr + 1];
                         let h2 = self.vram[vram_addr + 2];
@@ -94,7 +100,10 @@ impl RendererImpl for SoftwareRenderer {
                         frame_idx += 8;
                     }
                 } else {
-                    for _ in 0..self.resolution.width {
+                    if debug {
+                        vram_addr = y * width;
+                    }
+                    for _ in 0..width {
                         let pixel = self.vram[vram_addr];
                         let col = Color::from_rgb15(pixel);
                         frame.frame_buffer[frame_idx + 0] = col.r;
@@ -110,34 +119,17 @@ impl RendererImpl for SoftwareRenderer {
         }
     }
     fn write_vram_block(&mut self, data_in: &[u16], to: Coord, size: Size) {
-        let x_end = to.x + size.width as i16;
-        if x_end > 1024 {
-            // Wrap left-right.
-            for y in 0..size.height {
-                let first_block_size = 1024 - (to.x as usize);
-                let src_begin = (y * size.width) as usize;
-                let src_end = src_begin + first_block_size;
-                let dst_begin = Coord {x: to.x, y: to.y + y as i16}.get_vram_idx();
-                let dst_end = dst_begin + first_block_size;
-                let dest = &mut self.vram[dst_begin..dst_end];
-                dest.copy_from_slice(&data_in[src_begin..src_end]);
-
-                let second_block_size = (size.width as usize) - first_block_size;
-                let src_begin = src_end;
-                let src_end = src_begin + second_block_size;
-                let dst_begin = Coord {x: 0, y: to.y + y as i16}.get_vram_idx();
-                let dst_end = dst_begin + second_block_size;
-                let dest = &mut self.vram[dst_begin..dst_end];
-                dest.copy_from_slice(&data_in[src_begin..src_end]);
-            }
-        } else {
-            for y in 0..size.height {
-                let src_begin = (y * size.width) as usize;
-                let src_end = src_begin + (size.width as usize);
-                let dst_begin = Coord {x: to.x, y: to.y + y as i16}.get_vram_idx();
-                let dst_end = dst_begin + (size.width as usize);
-                let dest = &mut self.vram[dst_begin..dst_end];
-                dest.copy_from_slice(&data_in[src_begin..src_end]);
+        let mask = if self.set_mask_bit {0x8000} else {0};
+        for y in 0..size.height {
+            let src_begin = (y * size.width) as usize;
+            let src_end = src_begin + (size.width as usize);
+            let addr_base = (to.y + y as i16) as usize * 1024;
+            for (x, pixel) in data_in[src_begin..src_end].iter().cloned().enumerate() {
+                let x_addr = ((to.x as usize) + x) % 1024;
+                let addr = addr_base + x_addr;
+                if !self.check_mask_bit || !test_bit!(self.vram[addr], 15) {
+                    self.vram[addr] = pixel | mask;
+                }
             }
         }
     }
@@ -155,6 +147,7 @@ impl RendererImpl for SoftwareRenderer {
         }
     }
     fn copy_vram_block(&mut self, from: Coord, to: Coord, size: Size) {
+        // TODO: fix copy range issues + use mask flags
         if from.x + size.width as i16 > 1024 || to.x + size.width as i16 > 1024 {
             panic!("copy {:X} from {:X} to {:X}", size.width, from.x, to.x);
         }
