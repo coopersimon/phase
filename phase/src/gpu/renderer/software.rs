@@ -147,15 +147,20 @@ impl RendererImpl for SoftwareRenderer {
         }
     }
     fn copy_vram_block(&mut self, from: Coord, to: Coord, size: Size) {
-        // TODO: fix copy range issues + use mask flags
-        if from.x + size.width as i16 > 1024 || to.x + size.width as i16 > 1024 {
-            panic!("copy {:X} from {:X} to {:X}", size.width, from.x, to.x);
-        }
-        for line in 0..size.height {
-            let src_begin = Coord {x: from.x, y: from.y + line as i16}.get_vram_idx();
-            let src_end = src_begin + (size.width as usize);
-            let dest = Coord {x: to.x, y: to.y + line as i16}.get_vram_idx();
-            self.vram.copy_within(src_begin..src_end, dest);
+        let mask = if self.set_mask_bit {0x8000} else {0};
+        for y in 0..size.height {
+            let read_addr_base = (from.y + y as i16) as usize * 1024;
+            let write_addr_base = (to.y + y as i16) as usize * 1024;
+            for x in 0..size.width {
+                let read_x_addr = ((from.x + x as i16) as usize) % 1024;
+                let write_x_addr = ((to.x + x as i16) as usize) % 1024;
+                let read_addr = read_addr_base + read_x_addr;
+                let write_addr = write_addr_base + write_x_addr;
+                let data = self.vram[read_addr];
+                if !self.check_mask_bit || !test_bit!(data, 15) {
+                    self.vram[write_addr] = data | mask;
+                }
+            }
         }
     }
 
@@ -266,13 +271,15 @@ impl RendererImpl for SoftwareRenderer {
         let x_min = left.max(self.drawing_area.left);
         let x_max = right.min(self.drawing_area.right);
         let start_coord = TexCoord {
-            s: if left < 0 {
-                ((tex_coord.s as u16 as i16) - left) as u8
+            s: if left < self.drawing_area.left {
+                let offset = self.drawing_area.left - left;
+                ((tex_coord.s as u16 as i16) + offset) as u8
             } else {
                 tex_coord.s
             },
-            t: if top < 0 {
-                ((tex_coord.t as u16 as i16) - top) as u8
+            t: if top < self.drawing_area.top {
+                let offset = self.drawing_area.top - top;
+                ((tex_coord.t as u16 as i16) + offset) as u8
             } else {
                 tex_coord.t
             },

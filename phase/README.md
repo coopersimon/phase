@@ -10,7 +10,7 @@ Below is a list of selected games and their status.
 - Boku no Natsuyasumi: Doesn't boot
 - Castlevania: Symphony of the Night: If left for a long time, plays Konami title then locks up.
 - Chrono Cross: Mostly OK, some blending issues.
-- Chrono Trigger: Starts OK, lots of 2d graphics glitches, then locks up before gameplay begins
+- Chrono Trigger: Starts OK, some 2d graphics glitches, then locks up before gameplay begins
 - Crash Bandicoot: Mostly ok
 - Crash Bandicoot 2: Mostly ok, frame rate issues
 - Crash Bandicoot 3: Mostly ok, frame rate issues
@@ -21,13 +21,13 @@ Below is a list of selected games and their status.
 - Final Fantasy 9: Shows a title with some glitchy graphics then tries to audio seek
 - Final Fantasy Tactics: Titles + video: intro sound seems to lock things up.
 - Grand Theft Auto 2: Loads up OK, a few framebuffer issues
-- Gran Turismo: Generally OK, but a lot of nonsense GPU commands that should do stuff. Locks up when trying to enter a race
+- Gran Turismo: Mostly OK
 - Metal Gear Solid: Waiting for SPU interrupt? Shows a few titles then locks up.
 - Resident Evil: Mostly OK.
 - Resident Evil 2: Mostly OK, intro cutscene is a bit broken if not skipped. Intro video is OK. gameplay seems OK
 - Silent Hill: Uses multitap memcard then locks up
 - Spyro the Dragon: Lots of completely broken textures, sound in intro cutscene doesn't play
-- Suikoden: Pretty good, issues with some clipped backgrounds/sprites behaving oddly at the top and left (they are getting shifted, not clipped)
+- Suikoden: Mostly ok
 - Tekken 3: Mostly ok!
 - Tony Hawk's Pro Skater 2: Shows some video then locks up (copy protection?) (got a bit further than before?)
 - Vagrant Story: Mostly ok before crash due to VRAM copy issue

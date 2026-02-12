@@ -233,7 +233,7 @@ impl Renderer {
             0x3C => self.draw_textured_shaded_quad(data, false),
             0x3E => self.draw_textured_shaded_quad(data, true),
 
-            0x40 => self.draw_line(data, false),
+            0x40 | 0x41 => self.draw_line(data, false),
             0x42 => self.draw_line(data, true),
             0x48 => self.draw_poly_line(data, false),
             0x4A => self.draw_poly_line(data, true),
@@ -821,7 +821,7 @@ impl Size {
     fn copy_clip(self) -> Self {
         Self {
             width: (self.width.wrapping_sub(1) & 0x3FF) + 1,
-            height: (self.height.wrapping_sub(1) & 0x3FF) + 1,
+            height: (self.height.wrapping_sub(1) & 0x1FF) + 1,
         }
     }
 
