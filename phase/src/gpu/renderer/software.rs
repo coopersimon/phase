@@ -224,10 +224,16 @@ impl RendererImpl for SoftwareRenderer {
         }
     }
 
-    fn draw_triangle(&mut self, vertices: &[Vertex], transparent: bool) {
+    fn draw_triangle_flat(&mut self, vertices: &[Vertex], color: Color, transparent: bool) {
+        self.rasterize_triangle(vertices, |renderer: &mut Self, _: &Line, addr: usize| {
+            renderer.write_pixel(addr, &color, transparent);
+        });
+    }
+
+    fn draw_triangle_shaded(&mut self, vertices: &[Vertex], transparent: bool) {
         self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
             let color = line.get_color();
-            renderer.write_pixel(addr, &color, transparent);
+            renderer.write_dithered_pixel(addr, &color, transparent);
         });
     }
 
@@ -235,10 +241,20 @@ impl RendererImpl for SoftwareRenderer {
         self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
             let tex_color = renderer.tex_lookup(&line.get_tex_coords(), tex_info);
             if tex_color != 0 {
+                let transparent = transparent && test_bit!(tex_color, 15);
+                renderer.write_pixel(addr, &Color::from_rgb15(tex_color), transparent);
+            }
+        });
+    }
+
+    fn draw_triangle_tex_blended(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool) {
+        self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
+            let tex_color = renderer.tex_lookup(&line.get_tex_coords(), tex_info);
+            if tex_color != 0 {
                 let color = line.get_color();
                 let frag_color = color.blend(&Color::from_rgb15(tex_color), !renderer.set_mask_bit);
                 let transparent = transparent && test_bit!(tex_color, 15);
-                renderer.write_pixel(addr, &frag_color, transparent);
+                renderer.write_dithered_pixel(addr, &frag_color, transparent);
             }
         });
     }
@@ -322,7 +338,7 @@ impl RendererImpl for SoftwareRenderer {
                 if x >= self.drawing_area.left &&
                     y >= self.drawing_area.top && y < self.drawing_area.bottom {
                     let addr = (y as usize) * 1024 + (x as usize);
-                    self.write_pixel(addr, &color.get(), transparent);
+                    self.write_dithered_pixel(addr, &color.get(), transparent);
                 }
                 if delta > 0 {
                     y += y_step;
@@ -348,7 +364,7 @@ impl RendererImpl for SoftwareRenderer {
                 if y >= self.drawing_area.top &&
                     x >= self.drawing_area.left && x < self.drawing_area.right {
                     let addr = (y as usize) * 1024 + (x as usize);
-                    self.write_pixel(addr, &color.get(), transparent);
+                    self.write_dithered_pixel(addr, &color.get(), transparent);
                 }
                 if delta > 0 {
                     x += x_step;
@@ -364,6 +380,19 @@ impl RendererImpl for SoftwareRenderer {
 
 // Internal
 impl SoftwareRenderer {
+    #[inline(always)]
+    fn write_dithered_pixel(&mut self, addr: usize, color: &Color, transparent: bool) {
+        let dithered_color = if self.dither {
+            let x = addr % 4;
+            let y = (addr / 1024) % 4;
+            let dither_addr = (y << 2) | x;
+            color.dither(DITHER_LUT[dither_addr])
+        } else {
+            color.clone()
+        };
+        self.write_pixel(addr, &dithered_color, transparent);
+    }
+
     #[inline(always)]
     fn write_pixel(&mut self, addr: usize, color: &Color, transparent: bool) {
         if !self.check_mask_bit || !test_bit!(self.vram[addr], 15) {
@@ -599,9 +628,9 @@ impl Line {
     }
     fn get_color(&self) -> Color {
         Color {
-            r: ((self.r.val + 0x8000) >> 16) as u8,
-            g: ((self.g.val + 0x8000) >> 16) as u8,
-            b: ((self.b.val + 0x8000) >> 16) as u8,
+            r: ((self.r.val + 0x8000) >> 16).clamp(0, 0xFF) as u8,
+            g: ((self.g.val + 0x8000) >> 16).clamp(0, 0xFF) as u8,
+            b: ((self.b.val + 0x8000) >> 16).clamp(0, 0xFF) as u8,
             mask: 0,
         }
     }
@@ -665,9 +694,9 @@ impl InterpolatedColor {
 
     fn get(&self) -> Color {
         Color {
-            r: ((self.r.val + 0x8000) >> 16) as u8,
-            g: ((self.g.val + 0x8000) >> 16) as u8,
-            b: ((self.b.val + 0x8000) >> 16) as u8,
+            r: ((self.r.val + 0x8000) >> 16).clamp(0, 0xFF) as u8,
+            g: ((self.g.val + 0x8000) >> 16).clamp(0, 0xFF) as u8,
+            b: ((self.b.val + 0x8000) >> 16).clamp(0, 0xFF) as u8,
             mask: 0,
         }
     }
@@ -679,3 +708,10 @@ impl InterpolatedColor {
         self.b.inc();
     }
 }
+
+const DITHER_LUT: [i8; 16] = [
+    -4,  0, -3,  1,
+     2, -2,  3, -1,
+    -3,  1, -4,  0,
+     3, -1,  2, -2
+];

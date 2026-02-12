@@ -306,7 +306,7 @@ impl Renderer {
             Vertex::from_xy(vertex_2).set_col(rgb),
             Vertex::from_xy(vertex_3).set_col(rgb),
         ];
-        self.renderer.draw_triangle(&vertices, transparent);
+        self.renderer.draw_triangle_flat(&vertices, Color::from_rgb24(rgb), transparent);
     }
 
     fn draw_textured_tri(&mut self, transparent: bool) {
@@ -338,7 +338,7 @@ impl Renderer {
             Vertex::from_xy(vertex_3).set_col(rgb).set_tex(texcoord_3),
         ];
         let tex_info = TexInfo::from_data(texcoord_1, texcoord_2);
-        self.renderer.draw_triangle_tex(&vertices, &tex_info, transparent);
+        self.renderer.draw_triangle_tex_blended(&vertices, &tex_info, transparent);
     }
 
     fn draw_shaded_tri(&mut self, rgb_1: u32, transparent: bool) {
@@ -352,7 +352,7 @@ impl Renderer {
             Vertex::from_xy(vertex_2).set_col(rgb_2),
             Vertex::from_xy(vertex_3).set_col(rgb_3),
         ];
-        self.renderer.draw_triangle(&vertices, transparent);
+        self.renderer.draw_triangle_shaded(&vertices, transparent);
     }
 
     fn draw_textured_shaded_tri(&mut self, rgb_1: u32, transparent: bool) {
@@ -370,7 +370,7 @@ impl Renderer {
             Vertex::from_xy(vertex_3).set_col(rgb_3).set_tex(texcoord_3),
         ];
         let tex_info = TexInfo::from_data(texcoord_1, texcoord_2);
-        self.renderer.draw_triangle_tex(&vertices, &tex_info, transparent);
+        self.renderer.draw_triangle_tex_blended(&vertices, &tex_info, transparent);
     }
 
     /// Draw a quad.
@@ -385,8 +385,9 @@ impl Renderer {
             Vertex::from_xy(vertex_3).set_col(rgb),
             Vertex::from_xy(vertex_4).set_col(rgb),
         ];
-        self.renderer.draw_triangle(&vertices[0..3], transparent);
-        self.renderer.draw_triangle(&vertices[1..4], transparent);
+        let color = Color::from_rgb24(rgb);
+        self.renderer.draw_triangle_flat(&vertices[0..3], color, transparent);
+        self.renderer.draw_triangle_flat(&vertices[1..4], color, transparent);
     }
 
     fn draw_textured_quad(&mut self, transparent: bool) {
@@ -425,8 +426,8 @@ impl Renderer {
             Vertex::from_xy(vertex_4).set_col(rgb).set_tex(texcoord_4),
         ];
         let tex_info = TexInfo::from_data(texcoord_1, texcoord_2);
-        self.renderer.draw_triangle_tex(&vertices[0..3], &tex_info, transparent);
-        self.renderer.draw_triangle_tex(&vertices[1..4], &tex_info, transparent);
+        self.renderer.draw_triangle_tex_blended(&vertices[0..3], &tex_info, transparent);
+        self.renderer.draw_triangle_tex_blended(&vertices[1..4], &tex_info, transparent);
     }
 
     fn draw_shaded_quad(&mut self, rgb_1: u32, transparent: bool) {
@@ -443,8 +444,8 @@ impl Renderer {
             Vertex::from_xy(vertex_3).set_col(rgb_3),
             Vertex::from_xy(vertex_4).set_col(rgb_4),
         ];
-        self.renderer.draw_triangle(&vertices[0..3], transparent);
-        self.renderer.draw_triangle(&vertices[1..4], transparent);
+        self.renderer.draw_triangle_shaded(&vertices[0..3], transparent);
+        self.renderer.draw_triangle_shaded(&vertices[1..4], transparent);
     }
 
     fn draw_textured_shaded_quad(&mut self, rgb_1: u32, transparent: bool) {
@@ -466,8 +467,8 @@ impl Renderer {
             Vertex::from_xy(vertex_4).set_col(rgb_4).set_tex(texcoord_4),
         ];
         let tex_info = TexInfo::from_data(texcoord_1, texcoord_2);
-        self.renderer.draw_triangle_tex(&vertices[0..3], &tex_info, transparent);
-        self.renderer.draw_triangle_tex(&vertices[1..4], &tex_info, transparent);
+        self.renderer.draw_triangle_tex_blended(&vertices[0..3], &tex_info, transparent);
+        self.renderer.draw_triangle_tex_blended(&vertices[1..4], &tex_info, transparent);
     }
 
     // Lines
@@ -766,8 +767,10 @@ trait RendererImpl {
     fn set_mask_settings(&mut self, set_mask_bit: bool, check_mask_bit: bool);
 
     fn fill_rectangle(&mut self, color: Color, top_left: Coord, size: Size);
-    fn draw_triangle(&mut self, vertices: &[Vertex], transparent: bool);
+    fn draw_triangle_flat(&mut self, vertices: &[Vertex], color: Color, transparent: bool);
+    fn draw_triangle_shaded(&mut self, vertices: &[Vertex], transparent: bool);
     fn draw_triangle_tex(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool);
+    fn draw_triangle_tex_blended(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool);
     fn draw_rectangle(&mut self, color: Color, top_left: Coord, size: Size, transparent: bool);
     fn draw_rectangle_tex(&mut self, color: Color, tex_coord: TexCoord, tex_info: &TexInfo, top_left: Coord, size: Size, transparent: bool);
     fn draw_line(&mut self, vertex_a: &Vertex, vertex_b: &Vertex, transparent: bool);
@@ -890,6 +893,15 @@ impl Color {
             g: (((self.g as u16) * (other.g as u16)) >> 7).try_into().unwrap_or(0xFF),
             b: (((self.b as u16) * (other.b as u16)) >> 7).try_into().unwrap_or(0xFF),
             mask: if use_other_mask {other.mask} else {0x8000},
+        }
+    }
+
+    fn dither(&self, dither_val: i8) -> Color {
+        Color {
+            r: (self.r as i16 + dither_val as i16).clamp(0, 0xFF) as u8,
+            g: (self.g as i16 + dither_val as i16).clamp(0, 0xFF) as u8,
+            b: (self.b as i16 + dither_val as i16).clamp(0, 0xFF) as u8,
+            mask: self.mask,
         }
     }
 }
