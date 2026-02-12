@@ -72,7 +72,11 @@ impl XAAudio {
             self.decode_4bit_samples(buffer, stereo);
         }
         let low_sample_rate = coding_info.contains(CodingInfo::SampleRate);
-        self.resample_audio(low_sample_rate);
+        if low_sample_rate {
+            self.resample_audio_19k();
+        } else {
+            self.resample_audio_38k();
+        }
         self.pending_samples = true;
     }
 
@@ -200,12 +204,30 @@ impl XAAudio {
         unimplemented!("8bit audio")
     }
 
-    /// CD audio arrives at 18.9kHz or 37.8kHz.
+    /// CD audio arrives at 18.9kHz.
     /// We need to resample to 44.1kHz for the SPU.
-    fn resample_audio(&mut self, low_sample_rate: bool) {
-        if low_sample_rate {
-            unimplemented!("18.9kHz CD audio");
+    fn resample_audio_19k(&mut self) {
+        self.conv_sample_buffer.clear();
+        // 3 samples in => 7 samples out
+        for base_idx in (0..self.sample_buffer.len()).step_by(3) {
+            self.conv_sample_buffer.push(self.sample_buffer[base_idx]);
+            for i in 0..6 {
+                let a_idx = base_idx + (i / 2);
+                let b_idx = if a_idx + 1 == self.sample_buffer.len() {a_idx} else {a_idx + 1};
+                let a = self.sample_buffer[a_idx];
+                let b = self.sample_buffer[b_idx];
+                let a_factor = LINEAR_INTERPOLATE_TABLE_19[i];
+                let b_factor = 32768 - a_factor;
+                let left = a[0] as i32 * a_factor + b[0] as i32 * b_factor;
+                let right = a[1] as i32 * a_factor + b[1] as i32 * b_factor;
+                self.conv_sample_buffer.push([(left >> 15) as i16, (right >> 15) as i16])
+            }
         }
+    }
+
+    /// CD audio arrives at 37.8kHz.
+    /// We need to resample to 44.1kHz for the SPU.
+    fn resample_audio_38k(&mut self) {
         self.conv_sample_buffer.clear();
         // 6 samples in => 7 samples out
         for base_idx in (0..self.sample_buffer.len()).step_by(6) {
@@ -215,7 +237,7 @@ impl XAAudio {
                 let b_idx = if a_idx + 1 == self.sample_buffer.len() {a_idx} else {a_idx + 1};
                 let a = self.sample_buffer[a_idx];
                 let b = self.sample_buffer[b_idx];
-                let a_factor = LINEAR_INTERPOLATE_TABLE[i];
+                let a_factor = LINEAR_INTERPOLATE_TABLE_38[i];
                 let b_factor = 32768 - a_factor;
                 let left = a[0] as i32 * a_factor + b[0] as i32 * b_factor;
                 let right = a[1] as i32 * a_factor + b[1] as i32 * b_factor;
@@ -225,7 +247,16 @@ impl XAAudio {
     }
 }
 
-const LINEAR_INTERPOLATE_TABLE: [i32; 6] = [
+const LINEAR_INTERPOLATE_TABLE_19: [i32; 6] = [
+    14043,
+    28087,
+    9362,
+    23406,
+    4681,
+    18725,
+];
+
+const LINEAR_INTERPOLATE_TABLE_38: [i32; 6] = [
     4681,
     9362,
     14043,
