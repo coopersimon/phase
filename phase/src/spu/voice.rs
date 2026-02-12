@@ -71,6 +71,7 @@ impl Voice {
         self.adsr_gen.init(self.adsr_lo, self.adsr_hi);
         self.adpcm_gen.reset();
         self.endx = false;
+        self.adsr_vol = 0;
     }
 
     pub fn key_off(&mut self) {
@@ -95,6 +96,15 @@ impl Voice {
 
     pub fn get_endx(&self) -> bool {
         self.endx
+    }
+
+    /// Internal: get sweep vol left.
+    pub fn get_vol_left(&self) -> u16 {
+        self.vol.get_left_current()
+    }
+    /// Internal: get sweep vol right.
+    pub fn get_vol_right(&self) -> u16 {
+        self.vol.get_right_current()
     }
 
     /// Get current ADSR vol, for noise and pitch mod.

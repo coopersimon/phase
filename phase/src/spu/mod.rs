@@ -44,6 +44,9 @@ pub struct SPU {
     ext_input_vol:  StereoVolume,
     reverb_vol:     StereoVolume,
 
+    echo_on:        u32,
+    reverb_addr:    u16,
+
     control:    SPUControl,
     status:     SPUStatus,
     irq_latch:  bool,
@@ -82,6 +85,9 @@ impl SPU {
             cd_input_vol:   Default::default(),
             ext_input_vol:  Default::default(),
             reverb_vol:     Default::default(),
+
+            echo_on:        0,
+            reverb_addr:    0,
 
             control:    SPUControl::empty(),
             status:     SPUStatus::empty(),
@@ -156,7 +162,7 @@ impl SPU {
 
 impl MemInterface for SPU {
     fn read_halfword(&mut self, addr: u32) -> u16 {
-        match addr {
+        let data = match addr {
             0x1F80_1C00..=0x1F80_1D7F => {
                 let voice_idx = (addr >> 4) & 0x1F;
                 self.voices[voice_idx as usize].read_halfword(addr & 0xF)
@@ -173,11 +179,11 @@ impl MemInterface for SPU {
             0x1F80_1D92 => self.get_pitch_mod_hi(),
             0x1F80_1D94 => self.get_noise_lo(),
             0x1F80_1D96 => self.get_noise_hi(),
-            0x1F80_1D98 => 0, // TODO:Echo flags
-            0x1F80_1D9A => 0, // TODO:Echo flags
+            0x1F80_1D98 => self.echo_on as u16,
+            0x1F80_1D9A => (self.echo_on >> 16) as u16,
             0x1F80_1D9C => self.get_endx_lo(),
             0x1F80_1D9E => self.get_endx_hi(),
-            0x1F80_1DA2 => 0, // TODO: reverb base
+            0x1F80_1DA2 => self.reverb_addr,
             0x1F80_1DA4 => self.ram_irq_addr,
             0x1F80_1DA6 => self.ram_addr,
             0x1F80_1DAA => self.control.bits(),
@@ -187,18 +193,28 @@ impl MemInterface for SPU {
             0x1F80_1DB2 => self.cd_input_vol.right as u16,
             0x1F80_1DB4 => self.ext_input_vol.left as u16,
             0x1F80_1DB6 => self.ext_input_vol.right as u16,
-            0x1F80_1DB8 => self.main_vol.get_left(),
-            0x1F80_1DBA => self.main_vol.get_right(),
+            0x1F80_1DB8 => self.main_vol.get_left_current(),
+            0x1F80_1DBA => self.main_vol.get_right_current(),
             0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
                 0
             },
-            0x1F80_1E00..=0x1F80_1E5F => 0, // Voice internal vol
+            0x1F80_1E00..=0x1F80_1E5F => {
+                let voice_idx = (addr >> 2) & 0x1F;
+                if test_bit!(addr, 1) {
+                    self.voices[voice_idx as usize].get_vol_right()
+                } else {
+                    self.voices[voice_idx as usize].get_vol_left()
+                }
+            },
             0x1F80_1E60..=0x1F80_1E7F => self.unknown_ram.read_halfword(addr - 0x1F80_1E60),
             _ => panic!("invalid SPU read {:X}", addr)
-        }
+        };
+        println!("SPU read {:X} from {:X}", data, addr);
+        data
     }
 
     fn write_halfword(&mut self, addr: u32, data: u16) {
+        println!("SPU write {:X} to {:X}", data, addr);
         match addr {
             0x1F80_1C00..=0x1F80_1D7F => {
                 let voice_idx = (addr >> 4) & 0x1F;
@@ -216,12 +232,12 @@ impl MemInterface for SPU {
             0x1F80_1D92 => self.set_pitch_mod_hi(data),
             0x1F80_1D94 => self.set_noise_lo(data),
             0x1F80_1D96 => self.set_noise_hi(data),
-            0x1F80_1D98 => {}, // TODO:Echo flags
-            0x1F80_1D9A => {}, // TODO:Echo flags
+            0x1F80_1D98 => self.echo_on = (self.echo_on & 0xFFFF_0000) | (data as u32),
+            0x1F80_1D9A => self.echo_on = (self.echo_on & 0x0000_FFFF) | ((data as u32) << 16),
             0x1F80_1D9C => {}, // ENDX
             0x1F80_1D9E => {}, // ENDX
             0x1F80_1DA0 => {}, // ?
-            0x1F80_1DA2 => {}, // TODO: reverb base
+            0x1F80_1DA2 => self.reverb_addr = data,
             0x1F80_1DA4 => self.ram_irq_addr = data,
             0x1F80_1DA6 => {
                 self.ram_addr = data;

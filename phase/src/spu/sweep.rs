@@ -17,10 +17,18 @@ impl SweepVolume {
     }
 
     pub fn get_left(&self) -> u16 {
-        self.left.current as u16
+        self.left.settings.bits() as u16
     }
 
     pub fn get_right(&self) -> u16 {
+        self.right.settings.bits() as u16
+    }
+
+    pub fn get_left_current(&self) -> u16 {
+        self.left.current as u16
+    }
+
+    pub fn get_right_current(&self) -> u16 {
         self.right.current as u16
     }
 
