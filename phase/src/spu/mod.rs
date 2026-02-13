@@ -242,12 +242,12 @@ impl MemInterface for SPU {
             0x1F80_1E60..=0x1F80_1E7F => self.unknown_ram.read_halfword(addr - 0x1F80_1E60),
             _ => panic!("invalid SPU read {:X}", addr)
         };
-        println!("SPU read {:X} from {:X}", data, addr);
+        //println!("SPU read {:X} from {:X}", data, addr);
         data
     }
 
     fn write_halfword(&mut self, addr: u32, data: u16) {
-        println!("SPU write {:X} to {:X}", data, addr);
+        //println!("SPU write {:X} to {:X}", data, addr);
         match addr {
             0x1F80_1C00..=0x1F80_1D7F => {
                 let voice_idx = (addr >> 4) & 0x1F;
