@@ -1,6 +1,7 @@
 mod voice;
 mod adsr;
 mod sweep;
+mod reverb;
 
 use std::collections::VecDeque;
 
@@ -19,6 +20,7 @@ use crate::{
 
 use voice::Voice;
 use sweep::SweepVolume;
+use reverb::ReverbUnit;
 
 const SPU_RAM_SIZE: usize = 512 * 1024;
 const SPU_FIFO_SIZE: usize = 32;
@@ -42,10 +44,10 @@ pub struct SPU {
     main_vol:       SweepVolume,
     cd_input_vol:   StereoVolume,
     ext_input_vol:  StereoVolume,
-    reverb_vol:     StereoVolume,
 
-    echo_on:        u32,
-    reverb_addr:    u16,
+    reverb:         ReverbUnit,
+    current_reverb: Stereo<i32>,
+    gen_reverb:     bool,
 
     control:    SPUControl,
     status:     SPUStatus,
@@ -84,10 +86,10 @@ impl SPU {
             main_vol:       Default::default(),
             cd_input_vol:   Default::default(),
             ext_input_vol:  Default::default(),
-            reverb_vol:     Default::default(),
 
-            echo_on:        0,
-            reverb_addr:    0,
+            reverb:         Default::default(),
+            current_reverb: Stereo::EQUILIBRIUM,
+            gen_reverb:     false,
 
             control:    SPUControl::empty(),
             status:     SPUStatus::empty(),
@@ -169,8 +171,8 @@ impl MemInterface for SPU {
             },
             0x1F80_1D80 => self.main_vol.get_left(),
             0x1F80_1D82 => self.main_vol.get_right(),
-            0x1F80_1D84 => self.reverb_vol.left as u16,
-            0x1F80_1D86 => self.reverb_vol.right as u16,
+            0x1F80_1D84 => self.reverb.output_vol.left as u16,
+            0x1F80_1D86 => self.reverb.output_vol.right as u16,
             0x1F80_1D88 => 0, // KON
             0x1F80_1D8A => 0, // KON
             0x1F80_1D8C => 0, // KOFF
@@ -179,11 +181,11 @@ impl MemInterface for SPU {
             0x1F80_1D92 => self.get_pitch_mod_hi(),
             0x1F80_1D94 => self.get_noise_lo(),
             0x1F80_1D96 => self.get_noise_hi(),
-            0x1F80_1D98 => self.echo_on as u16,
-            0x1F80_1D9A => (self.echo_on >> 16) as u16,
+            0x1F80_1D98 => self.get_echo_on_lo(),
+            0x1F80_1D9A => self.get_echo_on_hi(),
             0x1F80_1D9C => self.get_endx_lo(),
             0x1F80_1D9E => self.get_endx_hi(),
-            0x1F80_1DA2 => self.reverb_addr,
+            0x1F80_1DA2 => self.reverb.base_addr,
             0x1F80_1DA4 => self.ram_irq_addr,
             0x1F80_1DA6 => self.ram_addr,
             0x1F80_1DAA => self.control.bits(),
@@ -195,9 +197,40 @@ impl MemInterface for SPU {
             0x1F80_1DB6 => self.ext_input_vol.right as u16,
             0x1F80_1DB8 => self.main_vol.get_left_current(),
             0x1F80_1DBA => self.main_vol.get_right_current(),
-            0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
-                0
-            },
+
+            0x1F80_1DC0 => self.reverb.apf_offset[0],
+            0x1F80_1DC2 => self.reverb.apf_offset[1],
+            0x1F80_1DC4 => self.reverb.impulse_response,
+            0x1F80_1DC6 => self.reverb.comb_vol[0],
+            0x1F80_1DC8 => self.reverb.comb_vol[1],
+            0x1F80_1DCA => self.reverb.comb_vol[2],
+            0x1F80_1DCC => self.reverb.comb_vol[3],
+            0x1F80_1DCE => self.reverb.wall_response,
+            0x1F80_1DD0 => self.reverb.apf_vol[0],
+            0x1F80_1DD2 => self.reverb.apf_vol[1],
+            0x1F80_1DD4 => self.reverb.same_side_reflect_addr_left[0],
+            0x1F80_1DD6 => self.reverb.same_side_reflect_addr_right[0],
+            0x1F80_1DD8 => self.reverb.comb_addr_left[0],
+            0x1F80_1DDA => self.reverb.comb_addr_right[0],
+            0x1F80_1DDC => self.reverb.comb_addr_left[1],
+            0x1F80_1DDE => self.reverb.comb_addr_right[1],
+            0x1F80_1DE0 => self.reverb.same_side_reflect_addr_left[1],
+            0x1F80_1DE2 => self.reverb.same_side_reflect_addr_right[1],
+            0x1F80_1DE4 => self.reverb.diff_side_reflect_addr_left[0],
+            0x1F80_1DE6 => self.reverb.diff_side_reflect_addr_right[0],
+            0x1F80_1DE8 => self.reverb.comb_addr_left[2],
+            0x1F80_1DEA => self.reverb.comb_addr_right[2],
+            0x1F80_1DEC => self.reverb.comb_addr_left[3],
+            0x1F80_1DEE => self.reverb.comb_addr_right[3],
+            0x1F80_1DF0 => self.reverb.diff_side_reflect_addr_left[1],
+            0x1F80_1DF2 => self.reverb.diff_side_reflect_addr_right[1],
+            0x1F80_1DF4 => self.reverb.apf_addr_left[0],
+            0x1F80_1DF6 => self.reverb.apf_addr_right[0],
+            0x1F80_1DF8 => self.reverb.apf_addr_left[1],
+            0x1F80_1DFA => self.reverb.apf_addr_right[1],
+            0x1F80_1DFC => self.reverb.input_vol.left as u16,
+            0x1F80_1DFE => self.reverb.input_vol.right as u16,
+
             0x1F80_1E00..=0x1F80_1E5F => {
                 let voice_idx = (addr >> 2) & 0x1F;
                 if test_bit!(addr, 1) {
@@ -222,8 +255,8 @@ impl MemInterface for SPU {
             },
             0x1F80_1D80 => self.main_vol.set_left(data),
             0x1F80_1D82 => self.main_vol.set_right(data),
-            0x1F80_1D84 => self.reverb_vol.left = data as i16,
-            0x1F80_1D86 => self.reverb_vol.right = data as i16,
+            0x1F80_1D84 => self.reverb.output_vol.left = data as i16,
+            0x1F80_1D86 => self.reverb.output_vol.right = data as i16,
             0x1F80_1D88 => self.set_key_on_lo(data),
             0x1F80_1D8A => self.set_key_on_hi(data),
             0x1F80_1D8C => self.set_key_off_lo(data),
@@ -232,12 +265,12 @@ impl MemInterface for SPU {
             0x1F80_1D92 => self.set_pitch_mod_hi(data),
             0x1F80_1D94 => self.set_noise_lo(data),
             0x1F80_1D96 => self.set_noise_hi(data),
-            0x1F80_1D98 => self.echo_on = (self.echo_on & 0xFFFF_0000) | (data as u32),
-            0x1F80_1D9A => self.echo_on = (self.echo_on & 0x0000_FFFF) | ((data as u32) << 16),
+            0x1F80_1D98 => self.set_echo_on_lo(data),
+            0x1F80_1D9A => self.set_echo_on_hi(data),
             0x1F80_1D9C => {}, // ENDX
             0x1F80_1D9E => {}, // ENDX
             0x1F80_1DA0 => {}, // ?
-            0x1F80_1DA2 => self.reverb_addr = data,
+            0x1F80_1DA2 => self.reverb.set_base_addr(data),
             0x1F80_1DA4 => self.ram_irq_addr = data,
             0x1F80_1DA6 => {
                 self.ram_addr = data;
@@ -255,9 +288,40 @@ impl MemInterface for SPU {
             0x1F80_1DBA => {},
             0x1F80_1DBC => {},
             0x1F80_1DBE => {},
-            0x1F80_1DC0..=0x1F80_1DFF => { // Reverb
-                
-            },
+
+            0x1F80_1DC0 => self.reverb.apf_offset[0] = data,
+            0x1F80_1DC2 => self.reverb.apf_offset[1] = data,
+            0x1F80_1DC4 => self.reverb.impulse_response = data,
+            0x1F80_1DC6 => self.reverb.comb_vol[0] = data,
+            0x1F80_1DC8 => self.reverb.comb_vol[1] = data,
+            0x1F80_1DCA => self.reverb.comb_vol[2] = data,
+            0x1F80_1DCC => self.reverb.comb_vol[3] = data,
+            0x1F80_1DCE => self.reverb.wall_response = data,
+            0x1F80_1DD0 => self.reverb.apf_vol[0] = data,
+            0x1F80_1DD2 => self.reverb.apf_vol[1] = data,
+            0x1F80_1DD4 => self.reverb.same_side_reflect_addr_left[0] = data,
+            0x1F80_1DD6 => self.reverb.same_side_reflect_addr_right[0] = data,
+            0x1F80_1DD8 => self.reverb.comb_addr_left[0] = data,
+            0x1F80_1DDA => self.reverb.comb_addr_right[0] = data,
+            0x1F80_1DDC => self.reverb.comb_addr_left[1] = data,
+            0x1F80_1DDE => self.reverb.comb_addr_right[1] = data,
+            0x1F80_1DE0 => self.reverb.same_side_reflect_addr_left[1] = data,
+            0x1F80_1DE2 => self.reverb.same_side_reflect_addr_right[1] = data,
+            0x1F80_1DE4 => self.reverb.diff_side_reflect_addr_left[0] = data,
+            0x1F80_1DE6 => self.reverb.diff_side_reflect_addr_right[0] = data,
+            0x1F80_1DE8 => self.reverb.comb_addr_left[2] = data,
+            0x1F80_1DEA => self.reverb.comb_addr_right[2] = data,
+            0x1F80_1DEC => self.reverb.comb_addr_left[3] = data,
+            0x1F80_1DEE => self.reverb.comb_addr_right[3] = data,
+            0x1F80_1DF0 => self.reverb.diff_side_reflect_addr_left[1] = data,
+            0x1F80_1DF2 => self.reverb.diff_side_reflect_addr_right[1] = data,
+            0x1F80_1DF4 => self.reverb.apf_addr_left[0] = data,
+            0x1F80_1DF6 => self.reverb.apf_addr_right[0] = data,
+            0x1F80_1DF8 => self.reverb.apf_addr_left[1] = data,
+            0x1F80_1DFA => self.reverb.apf_addr_right[1] = data,
+            0x1F80_1DFC => self.reverb.input_vol.left = data as i16,
+            0x1F80_1DFE => self.reverb.input_vol.right = data as i16,
+
             0x1F80_1E60..=0x1F80_1E7F => self.unknown_ram.write_halfword(addr - 0x1F80_1E60, data),
             _ => panic!("invalid SPU write {:X}", addr)
         }
@@ -300,10 +364,15 @@ impl DMADevice for SPU {
 // Internal
 impl SPU {
     fn set_control(&mut self, data: u16) {
+        let reverb_enabled = self.control.contains(SPUControl::ReverbEnable);
         self.control = SPUControl::from_bits_truncate(data);
         if !self.control.contains(SPUControl::IRQEnable) {
             // Acknowledge
             self.status.remove(SPUStatus::IRQ);
+        }
+        if !reverb_enabled && self.control.contains(SPUControl::ReverbEnable) {
+            self.reverb.reset_buffer_addr();
+            self.gen_reverb = true;
         }
         // Set mode bits.
         self.status.remove(SPUStatus::SPUMode);
@@ -446,6 +515,34 @@ impl SPU {
         noise
     }
 
+    fn set_echo_on_lo(&mut self, data: u16) {
+        for i in 0..16 {
+            self.voices[i].set_echo(test_bit!(data, i));
+        }
+    }
+
+    fn set_echo_on_hi(&mut self, data: u16) {
+        for i in 0..8 {
+            self.voices[16 + i].set_echo(test_bit!(data, i));
+        }
+    }
+
+    fn get_echo_on_lo(&self) -> u16 {
+        let mut pmod = 0;
+        for i in 0..16 {
+            pmod |= if self.voices[i].get_echo() {1 << i} else {0};
+        }
+        pmod
+    }
+
+    fn get_echo_on_hi(&self) -> u16 {
+        let mut pmod = 0;
+        for i in 0..8 {
+            pmod |= if self.voices[16 + i].get_echo() {1 << i} else {0};
+        }
+        pmod
+    }
+
     /// Advance the noise. Should be called at 44.1kHz.
     fn clock_noise(&mut self) {
         let noise_step = ((self.control.intersection(SPUControl::NoiseFreqStep).bits() >> 8) + 4) as isize;
@@ -473,10 +570,15 @@ impl SPU {
         let irq_addr = (self.ram_irq_addr as u32) * 8;
         let mut output = Stereo::<i32>::EQUILIBRIUM;
         let mut prev_voice_vol = 0;
+        let mut reverb_input = Stereo::<i32>::EQUILIBRIUM;
         for voice in self.voices.iter_mut() {
             let (voice_out, irq) = voice.clock(&self.ram, irq_addr, prev_voice_vol, self.noise_level);
             output[0] += voice_out[0];
             output[1] += voice_out[1];
+            if voice.get_echo() {
+                reverb_input[0] += voice_out[0];
+                reverb_input[1] += voice_out[1];
+            }
             if irq && self.control.contains(SPUControl::IRQEnable) && !self.status.contains(SPUStatus::IRQ) {
                 self.status.insert(SPUStatus::IRQ);
                 self.irq_latch = true;
@@ -496,11 +598,26 @@ impl SPU {
                     ((self.cd_audio_sample[1] as i32 * self.cd_audio_damping as i32) >> 8) as i16
                 ]
             };
-            output[0] += (cd_audio[0] as i32) * (self.cd_input_vol.left as i32) >> 15;
-            output[1] += (cd_audio[1] as i32) * (self.cd_input_vol.right as i32) >> 15;
+            let cd_audio_left = (cd_audio[0] as i32) * (self.cd_input_vol.left as i32) >> 15;
+            let cd_audio_right = (cd_audio[1] as i32) * (self.cd_input_vol.right as i32) >> 15;
+            output[0] += cd_audio_left;
+            output[1] += cd_audio_right;
+            if self.control.contains(SPUControl::CDAudioReverb) {
+                reverb_input[0] += cd_audio_left;
+                reverb_input[1] += cd_audio_right;
+            }
         }
 
-        // TODO: reverb.
+        if self.control.contains(SPUControl::ReverbEnable) {
+            let reverb_out = if self.gen_reverb {
+                self.generate_reverb(reverb_input)
+            } else {
+                self.current_reverb
+            };
+            self.gen_reverb = !self.gen_reverb;
+            output[0] += reverb_out[0];
+            output[1] += reverb_out[1];
+        }
 
         if !self.control.contains(SPUControl::Mute) {
             Stereo::EQUILIBRIUM
@@ -510,6 +627,73 @@ impl SPU {
             let right = ((output[1].clamp(i16::MIN as i32, i16::MAX as i32)) * (main_vol.right as i32)) >> 15;
             [left as f32 / (32768.0), right as f32 / (32768.0)]
         }
+    }
+
+    /// Generate a new reverb sample.
+    /// Should only be called once every two samples.
+    fn generate_reverb(&mut self, reverb_input: Stereo<i32>) -> Stereo<i32> {
+        let left_in = (reverb_input[0] * self.reverb.input_vol.left as i32) >> 15;
+        let right_in = (reverb_input[1] * self.reverb.input_vol.right as i32) >> 15;
+        // Same side reflection:
+        let (left_addr_m, left_addr_d, left_writeback_addr) = self.reverb.same_side_addr_left();
+        let left_same_side = self.reverb.apply_reverb_input(left_in,
+            self.ram.read_halfword(left_addr_d),
+            self.ram.read_halfword(left_addr_m));
+        self.ram.write_halfword(left_writeback_addr, left_same_side);
+            // Right
+        let (right_addr_m, right_addr_d, right_writeback_addr) = self.reverb.same_side_addr_right();
+        let right_same_side = self.reverb.apply_reverb_input(right_in,
+            self.ram.read_halfword(right_addr_d),
+            self.ram.read_halfword(right_addr_m));
+        self.ram.write_halfword(right_writeback_addr, right_same_side);
+        // Different side reflection:
+        let (left_addr_m, left_addr_d, left_writeback_addr) = self.reverb.diff_side_addr_left();
+        let (right_addr_m, right_addr_d, right_writeback_addr) = self.reverb.diff_side_addr_right();
+        let left_diff_side = self.reverb.apply_reverb_input(left_in,
+            self.ram.read_halfword(right_addr_d),
+            self.ram.read_halfword(left_addr_m));
+        self.ram.write_halfword(left_writeback_addr, left_diff_side);
+            // Right
+        let right_diff_side = self.reverb.apply_reverb_input(right_in,
+            self.ram.read_halfword(left_addr_d),
+            self.ram.read_halfword(right_addr_m));
+        self.ram.write_halfword(right_writeback_addr, right_diff_side);
+        // Early echo (comb filter)
+        let comb_addr_left = self.reverb.comb_filter_addr_left();
+        let comb_data_left: [_; 4] = std::array::from_fn(|n| self.ram.read_halfword(comb_addr_left[n]));
+        let comb_left = self.reverb.apply_comb_filter(&comb_data_left);
+            // Right
+        let comb_addr_right = self.reverb.comb_filter_addr_right();
+        let comb_data_right: [_; 4] = std::array::from_fn(|n| self.ram.read_halfword(comb_addr_right[n]));
+        let comb_right = self.reverb.apply_comb_filter(&comb_data_right);
+        // Late reverb all pass filter 1
+        let apf_0_src_left = self.ram.read_halfword(self.reverb.apf_src_addr_left(0)) as i16 as i32;
+        let apf_0_left = comb_left - self.reverb.apply_apf(apf_0_src_left, 0);
+        self.ram.write_halfword(self.reverb.apf_dst_addr_left(0), apf_0_left as u16);
+        let apf_left_out = apf_0_src_left + self.reverb.apply_apf(apf_0_left, 0);
+            // Right
+        let apf_0_src_right = self.ram.read_halfword(self.reverb.apf_src_addr_right(0)) as i16 as i32;
+        let apf_0_right = comb_right - self.reverb.apply_apf(apf_0_src_right, 0);
+        self.ram.write_halfword(self.reverb.apf_dst_addr_right(0), apf_0_right as u16);
+        let apf_right_out = apf_0_src_right + self.reverb.apply_apf(apf_0_right, 0);
+        // Late reverb all pass filter 2
+        let apf_1_src_left = self.ram.read_halfword(self.reverb.apf_src_addr_left(1)) as i16 as i32;
+        let apf_1_left = apf_left_out - self.reverb.apply_apf(apf_1_src_left, 1);
+        self.ram.write_halfword(self.reverb.apf_dst_addr_left(1), apf_1_left as u16);
+        let left_out = apf_1_src_left + self.reverb.apply_apf(apf_1_left, 1);
+            // Right
+        let apf_1_src_right = self.ram.read_halfword(self.reverb.apf_src_addr_right(1)) as i16 as i32;
+        let apf_1_right = apf_right_out - self.reverb.apply_apf(apf_1_src_right, 1);
+        self.ram.write_halfword(self.reverb.apf_dst_addr_right(1), apf_1_right as u16);
+        let right_out = apf_1_src_right + self.reverb.apply_apf(apf_1_right, 1);
+
+        self.reverb.inc_buffer_addr();
+
+        self.current_reverb = [
+            (left_out * self.reverb.output_vol.left as i32) >> 15,
+            (right_out * self.reverb.output_vol.right as i32) >> 15,
+        ];
+        self.current_reverb
     }
 }
 

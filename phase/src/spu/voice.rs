@@ -25,6 +25,8 @@ pub struct Voice {
     pmod:           bool,
     /// Use as noise.
     noise:          bool,
+    /// Enable reverb.
+    echo_on:        bool,
 
     adpcm_gen:      ADPCMDecoder,
     active:         bool,
@@ -96,6 +98,14 @@ impl Voice {
 
     pub fn get_endx(&self) -> bool {
         self.endx
+    }
+
+    pub fn set_echo(&mut self, echo: bool) {
+        self.echo_on = echo;
+    }
+
+    pub fn get_echo(&self) -> bool {
+        self.echo_on
     }
 
     /// Internal: get sweep vol left.

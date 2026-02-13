@@ -11,9 +11,9 @@ Below is a list of selected games and their status.
 - Castlevania: Symphony of the Night: If left for a long time, plays Konami title then locks up.
 - Chrono Cross: Mostly OK, some blending issues.
 - Chrono Trigger: Starts OK, some 2d graphics glitches, then locks up before gameplay begins
-- Crash Bandicoot: Mostly ok
-- Crash Bandicoot 2: Mostly ok, frame rate issues
-- Crash Bandicoot 3: Mostly ok, frame rate issues
+- Crash Bandicoot: Mostly ok, audio dropout
+- Crash Bandicoot 2: Mostly ok, audio dropout, frame rate issues
+- Crash Bandicoot 3: Mostly ok, audio dropout, frame rate issues
 - Crash Team Racing: Locks up after displaying (broken) title screen
 - Dragon Warrior 7: Mostly ok, some perf issues
 - Final Fantasy 7: Startup ok, gameplay looks quite broken.
@@ -39,7 +39,6 @@ Below is a list of selected games and their status.
 
 - Analog controllers
 - Sound:
-  - Reverb
   - Missing CD Audio
 - Graphics fixes:
   - Texture mapping
