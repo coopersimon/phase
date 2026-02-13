@@ -1,4 +1,4 @@
-use dasp::frame::{Frame, Stereo};
+use dasp::frame::Stereo;
 
 use crate::{
     mem::ram::RAM,
@@ -15,8 +15,6 @@ pub struct Voice {
     vol:            SweepVolume,// 0, 2
     sample_rate:    u16,        // 4
     start_addr:     u16,        // 6
-    adsr_lo:        u16,        // 8
-    adsr_hi:        u16,        // A
     adsr_vol:       u16,        // C
     repeat_addr:    u16,        // E
 
@@ -29,11 +27,10 @@ pub struct Voice {
     echo_on:        bool,
 
     adpcm_gen:      ADPCMDecoder,
-    active:         bool,
     current_addr:   u32,
     pitch_count:    usize,
 
-    adsr_gen:       ADSRGenerator,
+    adsr_gen:       ADSRGenerator, // 8, A
 }
 
 impl Voice {
@@ -43,8 +40,8 @@ impl Voice {
             0x2 => self.vol.get_right(),
             0x4 => self.sample_rate,
             0x6 => self.start_addr,
-            0x8 => self.adsr_lo,
-            0xA => self.adsr_hi,
+            0x8 => self.adsr_gen.read_adsr_lo(),
+            0xA => self.adsr_gen.read_adsr_hi(),
             0xC => self.adsr_vol,
             0xE => self.repeat_addr,
             _ => unreachable!()
@@ -57,8 +54,8 @@ impl Voice {
             0x2 => self.vol.set_right(data),
             0x4 => self.sample_rate = data,
             0x6 => self.start_addr = data,
-            0x8 => self.adsr_lo = data,
-            0xA => self.adsr_hi = data,
+            0x8 => self.adsr_gen.write_adsr_lo(data),
+            0xA => self.adsr_gen.write_adsr_hi(data),
             0xC => self.adsr_vol = data,
             0xE => self.repeat_addr = data,
             _ => unreachable!()
@@ -67,13 +64,12 @@ impl Voice {
 
     pub fn key_on(&mut self) {
         self.current_addr = (self.start_addr as u32) * 8;
-        self.active = true;
         self.pitch_count = 0;
         self.repeat_addr = self.start_addr;
-        self.adsr_gen.init(self.adsr_lo, self.adsr_hi);
+        self.adsr_gen.init();
+        self.adsr_vol = 0;
         self.adpcm_gen.reset();
         self.endx = false;
-        self.adsr_vol = 0;
     }
 
     pub fn key_off(&mut self) {
@@ -141,12 +137,7 @@ impl Voice {
             let samples = self.adpcm_gen.get_samples(sample_idx);
             (self.interpolate_sample(samples, interpolation_idx), irq)
         };
-        let env_sample = self.apply_envelope(sample);
-        let out_sample = if self.active {
-            env_sample
-        } else {
-            Stereo::EQUILIBRIUM
-        };
+        let out_sample = self.apply_envelope(sample);
         (out_sample, irq)
     }
 }
@@ -209,9 +200,6 @@ impl Voice {
     fn apply_envelope(&mut self, sample: i32) -> Stereo<i32> {
         let adsr_vol = self.adsr_gen.step();
         self.adsr_vol = adsr_vol as u16;
-        if self.adsr_gen.is_off() {
-            self.active = false;
-        }
         let env_sample = (sample * adsr_vol as i32) >> 16;
         let sweep_vol = self.vol.get_vol();
         let sample_left = (env_sample * sweep_vol.left as i32) >> 16;

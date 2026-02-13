@@ -101,22 +101,11 @@ bitflags::bitflags! {
 
 impl VolumeSweepSettings {
     fn base_step_value(&self) -> i16 {
+        let base_step = self.intersection(VolumeSweepSettings::Step).bits();
         if self.contains(VolumeSweepSettings::Direction) {
-            match self.intersection(VolumeSweepSettings::Step).bits() {
-                0b00 => -8,
-                0b01 => -7,
-                0b10 => -6,
-                0b11 => -5,
-                _ => unreachable!()
-            }
+            -8 + base_step
         } else {
-            match self.intersection(VolumeSweepSettings::Step).bits() {
-                0b00 => 7,
-                0b01 => 6,
-                0b10 => 5,
-                0b11 => 4,
-                _ => unreachable!()
-            }
+            7 - base_step
         }
     }
 }
