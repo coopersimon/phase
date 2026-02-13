@@ -209,7 +209,7 @@ impl Mem32 for MemBus {
 
     fn read_byte(&mut self, addr: Self::Addr) -> Data<u8> {
         let (data, cycles) = match addr {
-            0x0000_0000..=0x007F_FFFF => (self.main_ram.read_byte(addr & 0x1F_FFFF), 2),
+            0x0000_0000..=0x007F_FFFF => (self.main_ram.read_byte(addr & 0x1F_FFFF), 1),
             0x1F00_0000..=0x1F7F_FFFF => (self.expansion_port_1.read_byte(addr), 1),
             0x1F80_0000..=0x1F80_03FF => (self.scratchpad.read_byte(addr & 0x3FF), 1),
             0x1F80_1000..=0x1F80_1FFF => (self.mut_io_device(addr).read_byte(addr), 1),
@@ -222,7 +222,7 @@ impl Mem32 for MemBus {
 
     fn write_byte(&mut self, addr: Self::Addr, data: u8) -> usize {
         match addr {
-            0x0000_0000..=0x007F_FFFF => {self.main_ram.write_byte(addr & 0x1F_FFFF, data); 2},
+            0x0000_0000..=0x007F_FFFF => {self.main_ram.write_byte(addr & 0x1F_FFFF, data); 1},
             0x1F00_0000..=0x1F7F_FFFF => {self.expansion_port_1.write_byte(addr, data); 1},
             0x1F80_0000..=0x1F80_03FF => {self.scratchpad.write_byte(addr & 0x3FF, data); 1},
             0x1F80_1000..=0x1F80_1FFF => {self.mut_io_device(addr).write_byte(addr, data); 1},
@@ -234,7 +234,7 @@ impl Mem32 for MemBus {
 
     fn read_halfword(&mut self, addr: Self::Addr) -> Data<u16> {
         let (data, cycles) = match addr {
-            0x0000_0000..=0x007F_FFFF => (self.main_ram.read_halfword(addr & 0x1F_FFFF), 2),
+            0x0000_0000..=0x007F_FFFF => (self.main_ram.read_halfword(addr & 0x1F_FFFF), 1),
             0x1F00_0000..=0x1F7F_FFFF => (self.expansion_port_1.read_halfword(addr), 1),
             0x1F80_0000..=0x1F80_03FF => (self.scratchpad.read_halfword(addr & 0x3FF), 1),
             0x1F80_1000..=0x1F80_1FFF => (self.mut_io_device(addr).read_halfword(addr), 1),
@@ -247,7 +247,7 @@ impl Mem32 for MemBus {
 
     fn write_halfword(&mut self, addr: Self::Addr, data: u16) -> usize {
         match addr {
-            0x0000_0000..=0x007F_FFFF => {self.main_ram.write_halfword(addr & 0x1F_FFFF, data); 2},
+            0x0000_0000..=0x007F_FFFF => {self.main_ram.write_halfword(addr & 0x1F_FFFF, data); 1},
             0x1F00_0000..=0x1F7F_FFFF => {self.expansion_port_1.write_halfword(addr, data); 1},
             0x1F80_0000..=0x1F80_03FF => {self.scratchpad.write_halfword(addr & 0x3FF, data); 1},
             0x1F80_1000..=0x1F80_1FFF => {self.mut_io_device(addr).write_halfword(addr, data); 1},
@@ -259,7 +259,7 @@ impl Mem32 for MemBus {
 
     fn read_word(&mut self, addr: Self::Addr) -> Data<u32> {
         let (data, cycles) = match addr {
-            0x0000_0000..=0x007F_FFFF => (self.main_ram.read_word(addr & 0x1F_FFFF), 2),
+            0x0000_0000..=0x007F_FFFF => (self.main_ram.read_word(addr & 0x1F_FFFF), 1),
             0x1F00_0000..=0x1F7F_FFFF => (self.expansion_port_1.read_word(addr), 1),
             0x1F80_0000..=0x1F80_03FF => (self.scratchpad.read_word(addr & 0x3FF), 1),
             0x1F80_1000..=0x1F80_1FFF => (self.mut_io_device(addr).read_word(addr), 1),
@@ -272,7 +272,7 @@ impl Mem32 for MemBus {
 
     fn write_word(&mut self, addr: Self::Addr, data: u32) -> usize {
         match addr {
-            0x0000_0000..=0x007F_FFFF => {self.main_ram.write_word(addr & 0x1F_FFFF, data); 2},
+            0x0000_0000..=0x007F_FFFF => {self.main_ram.write_word(addr & 0x1F_FFFF, data); 1},
             0x1F00_0000..=0x1F7F_FFFF => {self.expansion_port_1.write_word(addr, data); 1},
             0x1F80_0000..=0x1F80_03FF => {self.scratchpad.write_word(addr & 0x3FF, data); 1},
             0x1F80_1000..=0x1F80_1FFF => {self.mut_io_device(addr).write_word(addr, data); 1},
