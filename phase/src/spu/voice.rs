@@ -125,9 +125,6 @@ impl Voice {
     /// Clock a sample to advance audio decoding.
     /// Returns true if the irq_addr was encountered.
     pub fn clock(&mut self, ram: &RAM, irq_addr: u32, prev_voice_vol: i16, noise_level: i16) -> (Stereo<i32>, bool) {
-        if !self.active {
-            return (Stereo::EQUILIBRIUM, false);
-        }
         let (sample, irq) = if self.noise {
             (noise_level as i32, false)
         } else {
@@ -144,7 +141,12 @@ impl Voice {
             let samples = self.adpcm_gen.get_samples(sample_idx);
             (self.interpolate_sample(samples, interpolation_idx), irq)
         };
-        let out_sample = self.apply_envelope(sample);
+        let env_sample = self.apply_envelope(sample);
+        let out_sample = if self.active {
+            env_sample
+        } else {
+            Stereo::EQUILIBRIUM
+        };
         (out_sample, irq)
     }
 }

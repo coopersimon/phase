@@ -17,17 +17,17 @@ Below is a list of selected games and their status.
 - Crash Team Racing: Locks up after displaying (broken) title screen
 - Dragon Warrior 7: Mostly ok, some perf issues
 - Final Fantasy 7: Startup ok, gameplay looks quite broken.
-- Final Fantasy 8: Loads up mostly OK, graphics glitches in gameplay (clipping with bottom of frame.)
+- Final Fantasy 8: Intro is OK, some sound issues (vibrato?), opening cutscene is stuttery and has no sound
 - Final Fantasy 9: Shows a title with some glitchy graphics then tries to audio seek
-- Final Fantasy Tactics: Titles + video: intro sound seems to lock things up.
+- Final Fantasy Tactics: Mostly OK but menu seems to lock up after a short while.
 - Grand Theft Auto 2: Loads up OK, a few framebuffer issues
 - Gran Turismo: Mostly OK
-- Metal Gear Solid: Waiting for SPU interrupt? Shows a few titles then locks up.
-- Resident Evil: Mostly OK.
+- Metal Gear Solid: Boots OK, no sound.
+- Resident Evil: Mostly OK, backgrounds wrap weirdly on-screen.
 - Resident Evil 2: Mostly OK, intro cutscene is a bit broken if not skipped. Intro video is OK. gameplay seems OK
 - Silent Hill: Uses multitap memcard then locks up
 - Spyro the Dragon: Lots of completely broken textures, sound in intro cutscene doesn't play
-- Suikoden: Mostly ok
+- Suikoden: Mostly ok, no sound after intro.
 - Tekken 3: Mostly ok!
 - Tony Hawk's Pro Skater 2: Shows some video then locks up (copy protection?) (got a bit further than before?)
 - Vagrant Story: Mostly ok before crash due to VRAM copy issue
