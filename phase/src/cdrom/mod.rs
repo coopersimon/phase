@@ -1,18 +1,10 @@
+mod disc;
 mod xaaudio;
-
-use std::{
-    fs::File,
-    io::{
-        Read,
-        Seek,
-        SeekFrom
-    },
-    path::Path
-};
 
 use mips::mem::Data;
 use dasp::frame::Stereo;
 
+use disc::Disc;
 use xaaudio::XAAudio;
 use crate::{interrupt::Interrupt, mem::DMADevice};
 use crate::utils::{
@@ -24,8 +16,6 @@ use std::collections::VecDeque;
 
 /// CD sectors are 2352 bytes.
 const SECTOR_SIZE: u64 = 2352;
-/// Hold 1 second of data in the memory buffer.
-const DISC_BUFFER_SIZE: u64 = 75 * SECTOR_SIZE;
 /// Each sector starts with 12 sync bytes.
 const SECTOR_SYNC_BYTES: u64 = 12;
 /// Each sector starts with a 24 byte header, including
@@ -42,11 +32,8 @@ const SEEK_CYCLES: usize = 300000;
 
 /// CD-ROM reader.
 pub struct CDROM {
-    disc: Option<File>,
-    buffer: Vec<u8>,
-    buffer_file_offset: u64,
+    disc: Option<Disc>,
     seek_file_offset: u64,
-    sector_offset: u64,
 
     status: Status,
     int_enable: IntFlags,
@@ -80,10 +67,7 @@ impl CDROM {
     pub fn new() -> Self {
         Self {
             disc: None,
-            buffer: vec![0; DISC_BUFFER_SIZE as usize],
-            buffer_file_offset: u64::MAX,
             seek_file_offset: 0,
-            sector_offset: 0,
 
             status: Status::ParamFifoEmpty | Status::ParamFifoNotFull,
             int_enable: IntFlags::Unused,
@@ -112,15 +96,13 @@ impl CDROM {
     }
 
     /// Insert or remove a disc from the PlayStation.
-    pub fn insert_disc(&mut self, path: Option<&Path>) -> std::io::Result<()> {
+    pub fn insert_disc(&mut self, path: Option<&std::path::Path>) -> std::io::Result<()> {
         self.drive_status.insert(DriveStatus::ShellOpen);
         if let Some(path) = path {
-            let disc_file = File::open(path)?;
-            self.disc = Some(disc_file);
-            self.buffer_file_offset = u64::MAX;
+            let mut disc = Disc::new(path)?;
             self.seek_file_offset = 0;
-            self.sector_offset = 0;
-            self.read_from_file();
+            disc.load_from_file(0, self.seek_file_offset);
+            self.disc = Some(disc);
         } else {
             self.disc = None
         }
@@ -417,9 +399,7 @@ impl CDROM {
     }
 
     fn read_data(&mut self) -> u8 {
-        let index = self.sector_offset as usize;
-        let data = self.buffer[index];
-        self.sector_offset += 1;
+        let data = self.disc.as_mut().map(|d| d.read_byte()).unwrap_or_default();
         self.data_fifo_size -= 1;
         if self.data_fifo_size == 0 {
             self.status.remove(Status::DataFifoNotEmpty);
@@ -438,18 +418,28 @@ impl CDROM {
     fn read_sector(&mut self) -> bool {
         // Check if we need to load from disc.
         println!("CD read @ {:X}", self.seek_file_offset);
-        self.read_from_file();
-        let start_pos = self.seek_file_offset - self.buffer_file_offset;
-        self.current_sector_header = SectorHeader::from_slice(&self.buffer[(start_pos + SECTOR_SYNC_BYTES) as usize..]);
-        let trigger_int_1 = if self.send_xa_adpcm_sector(start_pos) {
+        if let Some(disc) = self.disc.as_mut() {
+            // TODO: set track.
+            disc.load_from_file(0, self.seek_file_offset);
+            disc.set_sector_offset(self.seek_file_offset);
+            self.current_sector_header = SectorHeader::from_slice(disc.ref_sector_data(SECTOR_SYNC_BYTES, 8));
+        } else {
+            // No disc inserted.
+            return false;
+        };
+        let trigger_int_1 = if self.send_xa_adpcm_sector() {
             false
         } else {
             // Send as data.
             if self.mode.contains(DriveMode::SectorSize) {
-                self.sector_offset = start_pos + SECTOR_SYNC_BYTES;
+                if let Some(disc) = self.disc.as_mut() {
+                    disc.adjust_sector_offset(SECTOR_SYNC_BYTES);
+                }
                 self.data_fifo_size = SECTOR_SIZE - SECTOR_SYNC_BYTES;
             } else {
-                self.sector_offset = start_pos + SECTOR_HEADER;
+                if let Some(disc) = self.disc.as_mut() {
+                    disc.adjust_sector_offset(SECTOR_HEADER);
+                }
                 self.data_fifo_size = SECTOR_DATA;
             }
             self.status.insert(Status::DataFifoNotEmpty);
@@ -465,7 +455,7 @@ impl CDROM {
     /// 
     /// The sector might not be ADPCM, in which case, this
     /// will return false.
-    fn send_xa_adpcm_sector(&mut self, data_start_pos: u64) -> bool {
+    fn send_xa_adpcm_sector(&mut self) -> bool {
         if self.mode.contains(DriveMode::XAADPCM) {
             //println!("try XA-ADPCM: {:X} {:X} {:X} {:X}", self.current_sector_header.file, self.current_sector_header.channel, self.current_sector_header.submode.bits(), self.current_sector_header.coding);
             if !self.current_sector_header.submode.contains(CDSectorSubmode::Audio | CDSectorSubmode::RealTime) {
@@ -478,46 +468,22 @@ impl CDROM {
                     return true;
                 }
             }
-            let pos = (data_start_pos + SECTOR_HEADER) as usize;
-            self.xa_audio.write_audio_sector(&self.buffer[pos..(pos + 0x900)], self.current_sector_header.coding);
+            if let Some(disc) = self.disc.as_ref() {
+                let buffer = disc.ref_sector_data(SECTOR_HEADER, 0x900);
+                self.xa_audio.write_audio_sector(buffer, self.current_sector_header.coding);
+            }
             true
         } else {
             false
         }
     }
 
-    /// Read from disc into buffer, if necessary.
-    /// 
-    /// It will read the sector pointed to by the offset, in addition to
-    /// other nearby sectors.
-    fn read_from_file(&mut self) {
-        let chunk_num = self.seek_file_offset / DISC_BUFFER_SIZE;
-        let target_file_offset = chunk_num * DISC_BUFFER_SIZE;
-        if self.buffer_file_offset == target_file_offset {
-            // No read necessary.
-            return;
-        }
-        let Some(disc_file) = self.disc.as_mut() else {
-            return;
-        };
-        self.buffer_file_offset = target_file_offset;
-        disc_file.seek(SeekFrom::Start(self.buffer_file_offset)).expect("could not seek in disc");
-        disc_file.read(&mut self.buffer).expect("could not load disc data");
-        println!("CD load from disc @ {:X}", self.buffer_file_offset);
-    }
-
     /// Inspect the final sector.
-    fn get_final_sector(&self) -> DriveResult<DriveLoc> {
-        let Some(disc_file) = self.disc.as_ref() else {
+    fn get_final_sector(&mut self) -> DriveResult<DriveLoc> {
+        let Some(disc) = self.disc.as_mut() else {
             return Err(DriveError::SeekFailed);
         };
-        let metadata = disc_file.metadata().expect("could not get file metadata");
-        let file_len = metadata.len();
-        let sector_count = file_len / SECTOR_SIZE;
-        let total_seconds = (sector_count / 75) + 2; // Round down to nearest second, and offset by 2.
-        let minute = (total_seconds / 60) as u8;
-        let second = (total_seconds % 60) as u8;
-        Ok(DriveLoc { minute, second, sector: 0 })
+        Ok(disc.get_end_pos())
     }
 
     /// Execute the current command.
@@ -588,7 +554,7 @@ bitflags::bitflags! {
 }
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, PartialEq)]
     struct DriveMode: u8 {
         const Speed         = bit!(7);
         const XAADPCM       = bit!(6);
@@ -680,14 +646,17 @@ impl CDROM {
     }
 
     fn set_mode(&mut self) -> DriveResult<()> {
-        // There are a few cases of games modifying the mode
-        // mid-read, before firing off the new read. This can
-        // lead to issues when the "old" read arrives and tries
-        // to be read with the "new" mode.
-        self.read_data_counter = 0;
         let mode = self.read_parameter()?;
         println!("Set mode: {:X}", mode);
-        self.mode = DriveMode::from_bits_truncate(mode);
+        let new_mode = DriveMode::from_bits_truncate(mode);
+        if new_mode != self.mode {
+            // There are a few cases of games modifying the mode
+            // mid-read, before firing off the new read. This can
+            // lead to issues when the "old" read arrives and tries
+            // to be read with the "new" mode.
+            self.read_data_counter = 0;
+        }
+        self.mode = new_mode;
         self.send_response(self.drive_status.bits(), 3);
         self.command_complete()
     }
@@ -927,7 +896,7 @@ impl CDROM {
             },
             1 => {
                 let minute = to_bcd(0).unwrap();
-                let second = to_bcd(0).unwrap();
+                let second = to_bcd(2).unwrap();
                 self.send_response(self.drive_status.bits(), 3);
                 self.send_response(minute, 3);
                 self.send_response(second, 3);
