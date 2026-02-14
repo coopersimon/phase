@@ -182,7 +182,7 @@ impl Voice {
                 self.adsr_gen.end();
             }
         } else {
-            self.current_addr += 16;
+            self.current_addr = (self.current_addr + 16) & 0x7FFFF;
         }
     }
 
