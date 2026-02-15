@@ -121,13 +121,13 @@ impl Disc {
         let mut tracks = Vec::new();
         let mut current_pos = DriveLoc {
             minute: 0x00,
-            second: 0x02,
+            second: 0x00,
             sector: 0x00,
         };
         for track in cue_file.tracks {
             let path = folder_path.join(&track.file_name);
             let file = File::open(path)?;
-            let start_pos = current_pos;
+            let start_pos = current_pos.add(&DriveLoc { minute: 0, second: 2, sector: 0 }); // 2 second pre-gap.
             let end_pos = start_pos.add(&get_file_end_pos(&file));
             tracks.push(Track {
                 num: track.num as u8,
@@ -198,6 +198,8 @@ impl Disc {
         self.tracks.len() as u8
     }
 
+    /// Get track start pos.
+    /// This is taken from index 01 (i.e. after the pre-gap)
     pub fn get_track_start_pos(&self, track: u8) -> DriveLoc {
         let track_idx = (track - 1) as usize;
         self.tracks[track_idx].start_pos
@@ -208,15 +210,15 @@ impl Disc {
         self.tracks[track_idx].end_pos
     }
 
-    /// Get the current track.
-    pub fn get_current_track(&self) -> u8 {
-        self.current_track
+    pub fn get_current_track_end_pos(&self) -> DriveLoc {
+        self.get_track_end_pos(self.current_track)
     }
 
     /// Calculate the track based on the drive location.
     /// Also returns the relative position in the track.
-    fn calculate_track(&self, pos: &DriveLoc) -> (u8, DriveLoc) {
-        for track in self.tracks.iter() {
+    pub fn calculate_track(&self, pos: &DriveLoc) -> (u8, DriveLoc) {
+        // Assuming tracks are in chronological order...
+        for track in self.tracks.iter().rev() {
             if let Some(pos) = pos.relative_to(&track.start_pos) {
                 return (track.num, pos);
             }
@@ -230,7 +232,7 @@ fn get_file_end_pos(file: &File) -> DriveLoc {
     let metadata = file.metadata().expect("could not get file metadata");
     let file_len = metadata.len();
     let sector_count = file_len / SECTOR_SIZE;
-    let total_seconds = (sector_count / 75) + 2; // Round down to nearest second, and offset by 2.
+    let total_seconds = sector_count / 75; // Round down to nearest second.
     let minute = (total_seconds / 60) as u8;
     let second = (total_seconds % 60) as u8;
     DriveLoc { minute, second, sector: 0 }

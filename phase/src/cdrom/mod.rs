@@ -53,6 +53,9 @@ pub struct CDROM {
     pending_seek: Option<DriveLoc>,
     /// Determines if we are in seek mode.
     seeking: bool,
+    /// Determines if we are playing CD-audio,
+    /// or seeking before playing.
+    playing: bool,
     read_data_counter: usize,
     current_sector_header: SectorHeader,
 
@@ -83,6 +86,7 @@ impl CDROM {
             mode: DriveMode::empty(),
             pending_seek: None,
             seeking: false,
+            playing: false,
             read_data_counter: 0,
             current_sector_header: SectorHeader::default(),
 
@@ -121,7 +125,11 @@ impl CDROM {
             if self.read_data_counter == 0 {
                 if self.seeking {
                     self.drive_status.remove(DriveStatus::ReadBits);
-                    self.drive_status.insert(DriveStatus::Reading);
+                    if self.playing {
+                        self.drive_status.insert(DriveStatus::Playing);
+                    } else {
+                        self.drive_status.insert(DriveStatus::Reading);
+                    }
                     self.read_data_counter = self.get_read_cycles();
                     self.seeking = false;
                 } else {
@@ -422,7 +430,9 @@ impl CDROM {
             // No disc inserted.
             return false;
         };
-        let trigger_int_1 = if self.send_xa_adpcm_sector() {
+        let trigger_int_1 = if self.send_da_sector() {
+            self.mode.contains(DriveMode::Report)
+        } else if self.send_xa_adpcm_sector() {
             false
         } else {
             // Send as data.
@@ -443,6 +453,15 @@ impl CDROM {
         // Begin count down for the next read.
         self.read_data_counter = self.get_read_cycles();
         self.current_loc.next_sector();
+        if self.mode.contains(DriveMode::CDDA.intersection(DriveMode::AutoPause)) {
+            if let Some(disc) = self.disc.as_ref() {
+                if self.current_loc == disc.get_current_track_end_pos() {
+                    self.drive_status.remove(DriveStatus::ReadBits);
+                    self.playing = false;
+                    self.read_data_counter = 0;
+                }
+            }
+        }
         trigger_int_1
     }
 
@@ -465,7 +484,21 @@ impl CDROM {
             }
             if let Some(disc) = self.disc.as_ref() {
                 let buffer = disc.ref_sector_data(SECTOR_HEADER, 0x900);
-                self.xa_audio.write_audio_sector(buffer, self.current_sector_header.coding);
+                self.xa_audio.write_xa_adpcm_sector(buffer, self.current_sector_header.coding);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Try and send the read sector as CD audio to SPU.
+    fn send_da_sector(&mut self) -> bool {
+        // TODO: check if current track == audio?
+        if self.playing && self.mode.contains(DriveMode::CDDA) {
+            if let Some(disc) = self.disc.as_ref() {
+                let buffer = disc.ref_sector_data(0, 0x930);
+                self.xa_audio.write_cd_audio_sector(buffer);
             }
             true
         } else {
@@ -481,6 +514,7 @@ impl CDROM {
             0x00 => self.sync(),
             0x01 => self.get_stat(),
             0x02 => self.set_loc(),
+            0x03 => self.play(),
             0x06 => self.read_n(),
             0x07 => self.motor_on(),
             0x08 => self.stop(),
@@ -506,6 +540,7 @@ impl CDROM {
             _ => panic!("unknown CD-ROM command {:X}", self.command),
         };
         if let Err(res) = res {
+            // TODO: we need to send stat..?
             self.send_response(res.bits(), 5);
             self.status.remove(Status::Busy);
         }
@@ -554,7 +589,7 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct DriveLoc {
     minute: u8,
     second: u8,
@@ -570,13 +605,6 @@ impl DriveLoc {
     }
 
     fn byte_offset(&self) -> u64 {
-        //const SEC_SIZE: u64 = 75 * SECTOR_SIZE;
-        //const MIN_SIZE: u64 = 60 * SEC_SIZE;
-        //const ROOT_OFFSET: u64 = 2 * SEC_SIZE;
-        //let sector_offset = (self.sector as u64) * SECTOR_SIZE;
-        //let sec_offset = (self.second as u64) * SEC_SIZE;
-        //let min_offset = (self.minute as u64) * MIN_SIZE;
-        //min_offset + sec_offset + sector_offset - ROOT_OFFSET
         self.sectors() * SECTOR_SIZE
     }
 
@@ -705,6 +733,10 @@ impl CDROM {
     fn init(&mut self) -> DriveResult<()> {
         match self.response_count {
             0 => {
+                self.drive_status.remove(DriveStatus::ReadBits);
+                self.read_data_counter = 0;
+                self.seeking = false;
+                self.playing = false;
                 self.send_response(self.drive_status.bits(), 3);
                 self.first_response()
             },
@@ -742,6 +774,7 @@ impl CDROM {
             0 => {
                 self.drive_status.remove(DriveStatus::ReadBits);
                 self.read_data_counter = 0;
+                self.playing = false;
                 self.send_response(self.drive_status.bits(), 3);
                 self.first_response()
             },
@@ -758,6 +791,7 @@ impl CDROM {
             0 => {
                 self.send_response(self.drive_status.bits(), 3);
                 self.read_data_counter = 0;
+                self.playing = false;
                 self.begin_seek()
             },
             _ => {
@@ -769,10 +803,13 @@ impl CDROM {
     }
 
     fn set_loc(&mut self) -> DriveResult<()> {
+        let minute = self.read_parameter()?;
+        let second = self.read_parameter()?;
+        let sector = self.read_parameter()?;
         let seek_loc = DriveLoc {
-            minute: from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?,
-            second: from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?,
-            sector: from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?
+            minute: from_bcd(minute).ok_or(DriveError::InvalidParam)?,
+            second: from_bcd(second).ok_or(DriveError::InvalidParam)?,
+            sector: from_bcd(sector).ok_or(DriveError::InvalidParam)?
         };
         println!("Seek to {:02}:{:02}:{:02}", seek_loc.minute, seek_loc.second, seek_loc.sector);
         self.pending_seek = Some(seek_loc);
@@ -805,15 +842,7 @@ impl CDROM {
 
     /// Audio seek
     fn seek_p(&mut self) -> DriveResult<()> {
-        //self.seek_l()
-        unimplemented!("audio seek");
-        /*self.drive_status.remove(DriveStatus::ReadBits);
-        self.drive_status.insert(DriveStatus::Seeking);
-        self.drive_status.insert(DriveStatus::SpindleMotor);
-        let _byte_offset = self.loc.byte_offset();
-        // TODO ? (subchannel Q)
-        self.command_complete();
-        Ok(())*/
+        self.seek_l()
     }
 
     fn set_session(&mut self) -> DriveResult<()> {
@@ -836,6 +865,7 @@ impl CDROM {
     /// Read with retry
     fn read_n(&mut self) -> DriveResult<()> {
         self.drive_status.remove(DriveStatus::ReadBits);
+        self.playing = false;
         if let Some(loc) = self.pending_seek.take() {
             self.current_loc = loc;
             self.seeking = true;
@@ -853,6 +883,38 @@ impl CDROM {
     /// Read without retry
     fn read_s(&mut self) -> DriveResult<()> {
         self.read_n()
+    }
+
+    /// Read audio.
+    fn play(&mut self) -> DriveResult<()> {
+        if self.playing {
+            // If we are already playing, just return.
+            self.send_response(self.drive_status.bits(), 3);
+            return self.command_complete();
+        }
+        self.drive_status.remove(DriveStatus::ReadBits);
+        self.playing = true;
+        if !self.param_fifo.is_empty() {
+            let track = from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?;
+            println!("Play track {:02}", track);
+            let disc = self.disc.as_ref().ok_or(DriveError::InvalidCmd)?;
+            let track_seek_pos = disc.get_track_start_pos(track);
+            self.current_loc = track_seek_pos;
+            self.seeking = true;
+            self.drive_status.insert(DriveStatus::Seeking);
+            self.read_data_counter = SEEK_CYCLES;
+        } else if let Some(loc) = self.pending_seek.take() {
+            self.current_loc = loc;
+            self.seeking = true;
+            self.drive_status.insert(DriveStatus::Seeking);
+            self.read_data_counter = SEEK_CYCLES;
+        } else {
+            self.seeking = false;
+            self.drive_status.insert(DriveStatus::Playing);
+            self.read_data_counter = self.get_read_cycles();
+        }
+        self.send_response(self.drive_status.bits(), 3);
+        self.command_complete()
     }
 
     /// Read table of contents
@@ -900,25 +962,23 @@ impl CDROM {
     }
 
     fn get_loc_p(&mut self) -> DriveResult<()> {
-        let Some(disc) = self.disc.as_ref() else {
-            return Err(DriveError::InvalidCmd); // ?
+        let disc = self.disc.as_ref().ok_or(DriveError::InvalidCmd)?;
+        let (current_track, track_pos) = disc.calculate_track(&self.current_loc);
+        // TODO: get actual index information.
+        let index = if track_pos.minute == 0 && track_pos.second < 2 {
+            0x00 // pre-gap
+        } else {
+            0x01
         };
-        let current_track = disc.get_current_track();
-        let track_start = disc.get_track_start_pos(current_track);
-        let track_pos = DriveLoc {
-            minute: from_bcd(self.current_sector_header.minute).unwrap(),
-            second: from_bcd(self.current_sector_header.second).unwrap(),
-            sector: from_bcd(self.current_sector_header.sector).unwrap(),
-        };
-        let global_pos = track_start.add(&track_pos);
-        self.send_response(to_bcd(current_track).unwrap(), 3); // Track number
-        self.send_response(0x01, 3); // Index number
+        println!("get loc p | track {} | pos {:02}:{:02}:{:02} | glob {:02}:{:02}:{:02}", current_track, track_pos.minute, track_pos.second, track_pos.sector, self.current_loc.minute, self.current_loc.second, self.current_loc.sector);
+        self.send_response(to_bcd(current_track).unwrap(), 3);
+        self.send_response(to_bcd(index).unwrap(), 3);
         self.send_response(to_bcd(track_pos.minute).unwrap(), 3);
         self.send_response(to_bcd(track_pos.second).unwrap(), 3);
         self.send_response(to_bcd(track_pos.sector).unwrap(), 3);
-        self.send_response(to_bcd(global_pos.minute).unwrap(), 3);
-        self.send_response(to_bcd(global_pos.second).unwrap(), 3);
-        self.send_response(to_bcd(global_pos.sector).unwrap(), 3);
+        self.send_response(to_bcd(self.current_loc.minute).unwrap(), 3);
+        self.send_response(to_bcd(self.current_loc.second).unwrap(), 3);
+        self.send_response(to_bcd(self.current_loc.sector).unwrap(), 3);
         self.command_complete()
     }
 
@@ -938,9 +998,7 @@ impl CDROM {
     fn get_td(&mut self) -> DriveResult<()> {
         let track = from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?;
         println!("get TD {:X}", track);
-        let Some(disc) = self.disc.as_ref() else {
-            return Err(DriveError::InvalidCmd); // ?
-        };
+        let disc = self.disc.as_ref().ok_or(DriveError::InvalidCmd)?;
         let track_count = disc.get_track_count();
         if track == 0 || track > track_count { // End of last track.
             let end_pos = disc.get_track_end_pos(track_count);
@@ -950,9 +1008,10 @@ impl CDROM {
             self.command_complete()
         } else if track <= track_count {
             let start_pos = disc.get_track_start_pos(track);
+            println!("Track {} pos: {:02}:{:02}:{:02}", track, start_pos.minute, start_pos.second, start_pos.sector);
             self.send_response(self.drive_status.bits(), 3);
-            self.send_response(start_pos.minute, 3);
-            self.send_response(start_pos.second, 3);
+            self.send_response(to_bcd(start_pos.minute).unwrap(), 3);
+            self.send_response(to_bcd(start_pos.second).unwrap(), 3);
             self.command_complete()
         } else {
             Err(DriveError::InvalidParam)

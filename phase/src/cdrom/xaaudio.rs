@@ -9,6 +9,8 @@ use crate::{
 };
 
 /// CD subsystem for decoding XA-ADPCM.
+/// 
+/// It also holds CD-DA samples.
 pub struct XAAudio {
     current_vol: VolumeMap,
     staging_vol: VolumeMap,
@@ -63,8 +65,8 @@ impl XAAudio {
     }
 
     /// When encountering a new audio sector, this method
-    /// decodes the data.
-    pub fn write_audio_sector(&mut self, buffer: &[u8], coding_info: CodingInfo) {
+    /// decodes the ADPCM data.
+    pub fn write_xa_adpcm_sector(&mut self, buffer: &[u8], coding_info: CodingInfo) {
         let stereo = coding_info.contains(CodingInfo::Stereo);
         if coding_info.contains(CodingInfo::BitsPerSample) {
             self.decode_8bit_samples(buffer, stereo);
@@ -76,6 +78,17 @@ impl XAAudio {
             self.resample_audio_19k();
         } else {
             self.resample_audio_38k();
+        }
+        self.pending_samples = true;
+    }
+
+    /// This method fills the buffer with CD-audio samples.
+    pub fn write_cd_audio_sector(&mut self, buffer: &[u8]) {
+        self.conv_sample_buffer.clear();
+        for data in buffer.as_chunks::<4>().0 {
+            let left = (data[0] as i16) | ((data[1] as i16) << 8);
+            let right = (data[2] as i16) | ((data[3] as i16) << 8);
+            self.conv_sample_buffer.push([left, right]);
         }
         self.pending_samples = true;
     }
