@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 bitflags = "2.10"
 crossbeam-channel = "0.5"
+regex = "1.12"
 
 [dependencies.mips]
 git = "https://github.com/coopersimon/e-mips"
