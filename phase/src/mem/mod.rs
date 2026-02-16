@@ -84,8 +84,9 @@ impl MemBus {
         if self.gpu.dma_ready() {
             self.dma.gpu_req();
         }
-        // TODO: for now, just always assume we can accept another GPU command.
-        self.dma.gpu_list_req();
+        if self.gpu.dma_cmd_ready() {
+            self.dma.gpu_list_req();
+        }
 
         let mdec_status = self.mdec.clock(cycles);
         if mdec_status.data_in_ready {

@@ -39,6 +39,7 @@ pub struct SoftwareRenderer {
     dither: bool,
     set_mask_bit: bool,
     check_mask_bit: bool,
+    rgb24: bool,
 }
 
 impl SoftwareRenderer {
@@ -59,12 +60,13 @@ impl SoftwareRenderer {
             dither: false,
             set_mask_bit: false,
             check_mask_bit: false,
+            rgb24: false,
         }
     }
 }
 
 impl RendererImpl for SoftwareRenderer {
-    fn get_frame(&mut self, frame: &mut Frame, _interlace_state: InterlaceState, rgb24: bool, debug: bool) {
+    fn get_frame(&mut self, frame: &mut Frame, _interlace_state: InterlaceState, debug: bool) {
         let width = if debug {1024} else {self.resolution.width as usize};
         let height = if debug {512} else {
             let display_height = if self.interlace {self.display_height * 2} else {self.display_height};
@@ -82,7 +84,7 @@ impl RendererImpl for SoftwareRenderer {
                 };*/
                 let mut frame_idx = y * line_size;
                 let mut vram_addr = Coord {x: self.frame_pos.x, y: self.frame_pos.y + (y as i16)}.get_vram_idx();
-                if rgb24 {
+                if self.rgb24 {
                     if debug {
                         vram_addr = y * (width / 2);
                     }
@@ -180,6 +182,9 @@ impl RendererImpl for SoftwareRenderer {
     fn set_display_resolution(&mut self, res: Size, interlace: bool) {
         self.resolution = res;
         self.interlace = interlace;
+    }
+    fn set_color_depth(&mut self, rgb24: bool) {
+        self.rgb24 = rgb24;
     }
 
     fn set_draw_mode(&mut self, trans_mode: super::TransparencyMode, dither: bool) {
