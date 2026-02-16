@@ -235,14 +235,14 @@ impl Renderer {
 
             0x40 | 0x41 => self.draw_line(data, false),
             0x42 => self.draw_line(data, true),
-            0x48 => self.draw_poly_line(data, false),
+            0x48 | 0x4C => self.draw_poly_line(data, false),
             0x4A => self.draw_poly_line(data, true),
             0x50 => self.draw_shaded_line(data, false),
             0x52 => self.draw_shaded_line(data, true),
             0x58 => self.draw_shaded_poly_line(data, false),
             0x5A => self.draw_shaded_poly_line(data, true),
 
-            0x60 => self.draw_rectangle(data, false),
+            0x60 | 0x61 => self.draw_rectangle(data, false),
             0x62 | 0x63 => self.draw_rectangle(data, true),
             0x64 => self.draw_tex_rectangle(Some(data), false),
             0x65 => self.draw_tex_rectangle(None, false),

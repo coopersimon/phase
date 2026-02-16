@@ -121,7 +121,7 @@ impl RendererImpl for SoftwareRenderer {
     fn write_vram_block(&mut self, data_in: &[u16], to: Coord, size: Size) {
         let mask = if self.set_mask_bit {0x8000} else {0};
         for y in 0..size.height {
-            let src_begin = (y * size.width) as usize;
+            let src_begin = y as usize * size.width as usize;
             let src_end = src_begin + (size.width as usize);
             let addr_base = (to.y + y as i16) as usize * 1024;
             for (x, pixel) in data_in[src_begin..src_end].iter().cloned().enumerate() {
@@ -138,7 +138,7 @@ impl RendererImpl for SoftwareRenderer {
             panic!("copy {:X} from {:X}", size.width, from.x);
         }
         for y in 0..size.height {
-            let dst_begin = (y * size.width) as usize;
+            let dst_begin = y as usize * size.width as usize;
             let dst_end = dst_begin + (size.width as usize);
             let src_begin = Coord {x: from.x, y: from.y + y as i16}.get_vram_idx();
             let src_end = src_begin + (size.width as usize);

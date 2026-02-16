@@ -166,7 +166,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "mips"
 version = "0.1.0"
-source = "git+https://github.com/coopersimon/e-mips#7aabb5d4a632b444d363e8d183c67de34cfa16c5"
+source = "git+https://github.com/coopersimon/e-mips#e2125f47029a6a3d390b6c9d005235816f764aae"
 dependencies = [
  "num-traits",
 ]
