@@ -813,6 +813,8 @@ impl CDROM {
         };
         println!("Seek to {:02}:{:02}:{:02}", seek_loc.minute, seek_loc.second, seek_loc.sector);
         self.pending_seek = Some(seek_loc);
+        self.drive_status.remove(DriveStatus::ReadBits);
+        self.read_data_counter = 0;
         self.send_response(self.drive_status.bits(), 3);
         self.command_complete()
     }
