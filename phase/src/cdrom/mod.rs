@@ -64,6 +64,7 @@ pub struct CDROM {
     response_count: u8,
     data_fifo_size: u64,
     irq_latch: bool,
+    pending_irq_fifo: VecDeque<IntFlags>,
 }
 
 impl CDROM {
@@ -95,6 +96,7 @@ impl CDROM {
             response_count: 0,
             data_fifo_size: 0,
             irq_latch: false,
+            pending_irq_fifo: VecDeque::new(),
         }
     }
 
@@ -134,7 +136,7 @@ impl CDROM {
                     self.seeking = false;
                 } else {
                     if self.read_sector() {
-                        self.send_response(self.drive_status.bits(), 1);
+                        self.send_response(&[self.drive_status.bits()], 1);
                     }
                 }
                 self.status.remove(Status::ADPBusy); //?
@@ -359,6 +361,13 @@ impl CDROM {
         self.int_flags.remove(data_in);
         self.int_flags.insert(IntFlags::Unused);
         self.irq_latch = false;
+        if let Some(int) = self.pending_irq_fifo.pop_front() {
+            self.int_flags.remove(IntFlags::Response);
+            self.int_flags.insert(int);
+            if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
+                self.irq_latch = true;
+            }
+        }
     }
     
     fn read_response(&mut self) -> u8 {
@@ -372,13 +381,21 @@ impl CDROM {
     /// Write response from command.
     /// 
     /// Also sets interrupt bits. Int should be a value 1-7.
-    fn send_response(&mut self, data: u8, int: u8) {
-        self.response_fifo.push_back(data);
+    fn send_response(&mut self, data: &[u8], int: u8) {
+        // TODO: should we send response data immediately?
+        for byte in data {
+            self.response_fifo.push_back(*byte);
+        }
         self.status.insert(Status::ResFifoNotEmpty);
-        self.int_flags.remove(IntFlags::Response);
-        self.int_flags.insert(IntFlags::from_bits_truncate(int));
+        let int_flag = IntFlags::from_bits_truncate(int);
         if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
-            self.irq_latch = true;
+            self.pending_irq_fifo.push_back(int_flag);
+        } else {
+            self.int_flags.remove(IntFlags::Response);
+            self.int_flags.insert(int_flag);
+            if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
+                self.irq_latch = true;
+            }
         }
     }
 
@@ -540,9 +557,9 @@ impl CDROM {
             _ => panic!("unknown CD-ROM command {:X}", self.command),
         };
         if let Err(res) = res {
-            // TODO: we need to send stat..?
-            self.send_response(res.bits(), 5);
+            self.send_response(&[self.drive_status.bits(), res.bits()], 5);
             self.status.remove(Status::Busy);
+            self.drive_status.remove(DriveStatus::Error);
         }
     }
 }
@@ -710,7 +727,7 @@ impl CDROM {
         let file_filter = self.read_parameter()?;
         let channel_filter = self.read_parameter()?;
         self.xa_audio.set_filters(file_filter, channel_filter);
-        self.send_response(self.drive_status.bits(), 3);
+        self.send_response(&[self.drive_status.bits()], 3);
         self.command_complete()
     }
 
@@ -726,7 +743,7 @@ impl CDROM {
             self.read_data_counter = 0;
         }
         self.mode = new_mode;
-        self.send_response(self.drive_status.bits(), 3);
+        self.send_response(&[self.drive_status.bits()], 3);
         self.command_complete()
     }
 
@@ -737,13 +754,13 @@ impl CDROM {
                 self.read_data_counter = 0;
                 self.seeking = false;
                 self.playing = false;
-                self.send_response(self.drive_status.bits(), 3);
+                self.send_response(&[self.drive_status.bits()], 3);
                 self.first_response()
             },
             _ => {
                 self.mode = DriveMode::SectorSize;
                 self.drive_status.insert(DriveStatus::SpindleMotor);
-                self.send_response(self.drive_status.bits(), 2);
+                self.send_response(&[self.drive_status.bits()], 2);
                 self.command_complete()
             }
         }
@@ -758,12 +775,12 @@ impl CDROM {
         }*/
         match self.response_count {
             0 => {
-                self.send_response(self.drive_status.bits(), 3);
+                self.send_response(&[self.drive_status.bits()], 3);
                 self.first_response()
             },
             _ => {
                 self.drive_status.insert(DriveStatus::SpindleMotor);
-                self.send_response(self.drive_status.bits(), 2);
+                self.send_response(&[self.drive_status.bits()], 2);
                 self.command_complete()
             }
         }
@@ -775,12 +792,12 @@ impl CDROM {
                 self.drive_status.remove(DriveStatus::ReadBits);
                 self.read_data_counter = 0;
                 self.playing = false;
-                self.send_response(self.drive_status.bits(), 3);
+                self.send_response(&[self.drive_status.bits()], 3);
                 self.first_response()
             },
             _ => {
                 self.drive_status.remove(DriveStatus::SpindleMotor);
-                self.send_response(self.drive_status.bits(), 2);
+                self.send_response(&[self.drive_status.bits()], 2);
                 self.command_complete()
             }
         }
@@ -789,14 +806,14 @@ impl CDROM {
     fn pause(&mut self) -> DriveResult<()> {
         match self.response_count {
             0 => {
-                self.send_response(self.drive_status.bits(), 3);
+                self.send_response(&[self.drive_status.bits()], 3);
                 self.read_data_counter = 0;
                 self.playing = false;
                 self.begin_seek()
             },
             _ => {
                 self.drive_status.remove(DriveStatus::ReadBits);
-                self.send_response(self.drive_status.bits(), 2);
+                self.send_response(&[self.drive_status.bits()], 2);
                 self.command_complete()
             }
         }
@@ -815,7 +832,7 @@ impl CDROM {
         self.pending_seek = Some(seek_loc);
         self.drive_status.remove(DriveStatus::ReadBits);
         self.read_data_counter = 0;
-        self.send_response(self.drive_status.bits(), 3);
+        self.send_response(&[self.drive_status.bits()], 3);
         self.command_complete()
     }
 
@@ -827,7 +844,7 @@ impl CDROM {
                 self.drive_status.remove(DriveStatus::ReadBits);
                 self.drive_status.insert(DriveStatus::Seeking);
                 self.drive_status.insert(DriveStatus::SpindleMotor);
-                self.send_response(self.drive_status.bits(), 3);
+                self.send_response(&[self.drive_status.bits()], 3);
                 self.begin_seek()
             },
             _ => {
@@ -836,7 +853,7 @@ impl CDROM {
                 }
                 self.seeking = false;
                 self.drive_status.remove(DriveStatus::ReadBits);
-                self.send_response(self.drive_status.bits(), 2);
+                self.send_response(&[self.drive_status.bits()], 2);
                 self.command_complete()
             }
         }
@@ -851,15 +868,15 @@ impl CDROM {
         // Only support session 1.
         let session = self.read_parameter()?;
         if session == 0x00 {
-            self.send_response(0x03, 5);
+            self.send_response(&[0x03], 5);
             Err(DriveError::InvalidParam)
         } else if session > 0x01 {
-            self.send_response(self.drive_status.bits(), 3);
-            self.send_response(0x06, 5);
+            self.send_response(&[self.drive_status.bits()], 3);
+            self.send_response(&[0x06], 5);
             Err(DriveError::InvalidCmd)
         } else {
-            self.send_response(self.drive_status.bits(), 3);
-            self.send_response(self.drive_status.bits(), 2);
+            self.send_response(&[self.drive_status.bits()], 3);
+            self.send_response(&[self.drive_status.bits()], 2); //???
             self.command_complete()
         }
     }
@@ -878,7 +895,7 @@ impl CDROM {
             self.drive_status.insert(DriveStatus::Reading);
             self.read_data_counter = self.get_read_cycles();
         }
-        self.send_response(self.drive_status.bits(), 3);
+        self.send_response(&[self.drive_status.bits()], 3);
         self.command_complete()
     }
 
@@ -891,7 +908,7 @@ impl CDROM {
     fn play(&mut self) -> DriveResult<()> {
         if self.playing {
             // If we are already playing, just return.
-            self.send_response(self.drive_status.bits(), 3);
+            self.send_response(&[self.drive_status.bits()], 3);
             return self.command_complete();
         }
         self.drive_status.remove(DriveStatus::ReadBits);
@@ -915,7 +932,7 @@ impl CDROM {
             self.drive_status.insert(DriveStatus::Playing);
             self.read_data_counter = self.get_read_cycles();
         }
-        self.send_response(self.drive_status.bits(), 3);
+        self.send_response(&[self.drive_status.bits()], 3);
         self.command_complete()
     }
 
@@ -924,11 +941,11 @@ impl CDROM {
         // This doesn't return anything interesting.
         match self.response_count {
             0 => {
-                self.send_response(self.drive_status.bits(), 3);
+                self.send_response(&[self.drive_status.bits()], 3);
                 self.first_response()
             },
             _ => {
-                self.send_response(self.drive_status.bits(), 2);
+                self.send_response(&[self.drive_status.bits()], 2);
                 self.command_complete()
             }
         }
@@ -936,30 +953,34 @@ impl CDROM {
 
     fn get_stat(&mut self) -> DriveResult<()> {
         println!("get stat: {:X}", self.drive_status.bits());
-        self.send_response(self.drive_status.bits(), 3);
+        self.send_response(&[self.drive_status.bits()], 3);
         self.drive_status.remove(DriveStatus::ShellOpen);
         self.command_complete()
     }
 
     fn get_param(&mut self) -> DriveResult<()> {
-        self.send_response(self.drive_status.bits(), 3);
-        self.send_response(self.mode.bits(), 3);
-        self.send_response(0x00, 3);
         let (file_filter, channel_filter) = self.xa_audio.get_filters();
-        self.send_response(file_filter, 3);
-        self.send_response(channel_filter, 3);
+        self.send_response(&[
+            self.drive_status.bits(),
+            self.mode.bits(),
+            0x00,
+            file_filter,
+            channel_filter,
+        ], 3);
         self.command_complete()
     }
 
     fn get_loc_l(&mut self) -> DriveResult<()> {
-        self.send_response(self.current_sector_header.minute, 3);
-        self.send_response(self.current_sector_header.second, 3);
-        self.send_response(self.current_sector_header.sector, 3);
-        self.send_response(self.current_sector_header.mode, 3);
-        self.send_response(self.current_sector_header.file, 3);
-        self.send_response(self.current_sector_header.channel, 3);
-        self.send_response(self.current_sector_header.submode.bits(), 3);
-        self.send_response(self.current_sector_header.coding.bits(), 3);
+        self.send_response(&[
+            self.current_sector_header.minute,
+            self.current_sector_header.second,
+            self.current_sector_header.sector,
+            self.current_sector_header.mode,
+            self.current_sector_header.file,
+            self.current_sector_header.channel,
+            self.current_sector_header.submode.bits(),
+            self.current_sector_header.coding.bits()
+        ], 3);
         self.command_complete()
     }
 
@@ -973,14 +994,16 @@ impl CDROM {
             0x01
         };
         println!("get loc p | track {} | pos {:02}:{:02}:{:02} | glob {:02}:{:02}:{:02}", current_track, track_pos.minute, track_pos.second, track_pos.sector, self.current_loc.minute, self.current_loc.second, self.current_loc.sector);
-        self.send_response(to_bcd(current_track).unwrap(), 3);
-        self.send_response(to_bcd(index).unwrap(), 3);
-        self.send_response(to_bcd(track_pos.minute).unwrap(), 3);
-        self.send_response(to_bcd(track_pos.second).unwrap(), 3);
-        self.send_response(to_bcd(track_pos.sector).unwrap(), 3);
-        self.send_response(to_bcd(self.current_loc.minute).unwrap(), 3);
-        self.send_response(to_bcd(self.current_loc.second).unwrap(), 3);
-        self.send_response(to_bcd(self.current_loc.sector).unwrap(), 3);
+        self.send_response(&[
+            to_bcd(current_track).unwrap(),
+            to_bcd(index).unwrap(),
+            to_bcd(track_pos.minute).unwrap(),
+            to_bcd(track_pos.second).unwrap(),
+            to_bcd(track_pos.sector).unwrap(),
+            to_bcd(self.current_loc.minute).unwrap(),
+            to_bcd(self.current_loc.second).unwrap(),
+            to_bcd(self.current_loc.sector).unwrap()
+        ], 3);
         self.command_complete()
     }
 
@@ -990,9 +1013,11 @@ impl CDROM {
         let first_track = to_bcd(1).unwrap();
         let last_track = to_bcd(track_count).unwrap();
         println!("get TN {:X} => {:X}", first_track, last_track);
-        self.send_response(self.drive_status.bits(), 3);
-        self.send_response(first_track, 3);
-        self.send_response(last_track, 3);
+        self.send_response(&[
+            self.drive_status.bits(),
+            first_track,
+            last_track,
+        ], 3);
         self.command_complete()
     }
 
@@ -1004,16 +1029,20 @@ impl CDROM {
         let track_count = disc.get_track_count();
         if track == 0 || track > track_count { // End of last track.
             let end_pos = disc.get_track_end_pos(track_count);
-            self.send_response(self.drive_status.bits(), 3);
-            self.send_response(to_bcd(end_pos.minute).unwrap(), 3);
-            self.send_response(to_bcd(end_pos.second).unwrap(), 3);
+            self.send_response(&[
+                self.drive_status.bits(),
+                to_bcd(end_pos.minute).unwrap(),
+                to_bcd(end_pos.second).unwrap(),
+            ], 3);
             self.command_complete()
         } else if track <= track_count {
             let start_pos = disc.get_track_start_pos(track);
             println!("Track {} pos: {:02}:{:02}:{:02}", track, start_pos.minute, start_pos.second, start_pos.sector);
-            self.send_response(self.drive_status.bits(), 3);
-            self.send_response(to_bcd(start_pos.minute).unwrap(), 3);
-            self.send_response(to_bcd(start_pos.second).unwrap(), 3);
+            self.send_response(&[
+                self.drive_status.bits(),
+                to_bcd(start_pos.minute).unwrap(),
+                to_bcd(start_pos.second).unwrap(),
+            ], 3);
             self.command_complete()
         } else {
             Err(DriveError::InvalidParam)
@@ -1027,30 +1056,34 @@ impl CDROM {
     fn get_id(&mut self) -> DriveResult<()> {
         match self.response_count {
             0 => {
-                self.send_response(self.drive_status.bits(), 3);
+                self.send_response(&[self.drive_status.bits()], 3);
                 self.first_response()
             },
             _ => {
                 if self.disc.is_some() {
-                    self.send_response(0x02, 2); // Stat?
-                    self.send_response(0x00, 2); // Flags
-                    self.send_response(0x20, 2); // Mode 2
-                    self.send_response(0x00, 2);
-                    // Region String:
-                    self.send_response(0x53, 2); // S
-                    self.send_response(0x43, 2); // C
-                    self.send_response(0x45, 2); // E
-                    self.send_response(0x41, 2); // [Region: A/E/I] TODO: set based on disc. (41, 45, 49)
+                    self.send_response(&[
+                        0x02, // Stat?
+                        0x00, // Flags
+                        0x20, // Mode 2
+                        0x00,
+                        // Region String:
+                        0x53, // S
+                        0x43, // C
+                        0x45, // E
+                        0x41, // [Region: A/E/I] TODO: set based on disc. (41, 45, 49)
+                    ], 2);
                 } else {
-                    self.send_response(0x08, 5); // Stat?
-                    self.send_response(0x40, 5); // Flags
-                    self.send_response(0x00, 5);
-                    self.send_response(0x00, 5);
-                    // Region String:
-                    self.send_response(0x00, 5);
-                    self.send_response(0x00, 5);
-                    self.send_response(0x00, 5);
-                    self.send_response(0x00, 5);
+                    self.send_response(&[
+                        0x08, // Stat?
+                        0x40, // Flags
+                        0x00,
+                        0x00,
+
+                        0x00,
+                        0x00,
+                        0x00,
+                        0x00
+                    ], 5);
                 }
                 self.command_complete()
             }
@@ -1061,10 +1094,12 @@ impl CDROM {
         let op = self.read_parameter()?;
         match op {
             0x20 => { // CDROM BIOS
-                self.send_response(0x95, 3); // yy
-                self.send_response(0x05, 3); // mm
-                self.send_response(0x16, 3); // dd
-                self.send_response(0xC1, 3); // version
+                self.send_response(&[
+                    0x95, // yy
+                    0x05, // mm
+                    0x16, // dd
+                    0xC1, // version
+                ], 3);
                 self.command_complete()
             },
             _ => panic!("unsupported CD subfunction {:X}", op),
@@ -1072,13 +1107,13 @@ impl CDROM {
     }
 
     fn mute(&mut self) -> DriveResult<()> {
-        self.send_response(self.drive_status.bits(), 3);
+        self.send_response(&[self.drive_status.bits()], 3);
         self.command_complete()
     }
 
     fn demute(&mut self) -> DriveResult<()> {
         // TODO: start audio streaming..?
-        self.send_response(self.drive_status.bits(), 3);
+        self.send_response(&[self.drive_status.bits()], 3);
         self.command_complete()
     }
 }
