@@ -110,8 +110,8 @@ impl ADPCMDecoder {
     }
 }
 
-const POS_ADPCM_FILTER: [i32; 5] = [0, 60, 115, 98, 122];
-const NEG_ADPCM_FILTER: [i32; 5] = [0, 0, -52, -55, -60];
+const POS_ADPCM_FILTER: [i32; 8] = [0, 60, 115, 98, 122, 122, 122, 122];
+const NEG_ADPCM_FILTER: [i32; 8] = [0, 0, -52, -55, -60, -60, -60, -60];
 
 /// Decode a single ADPCM sample from the source nybble.
 /// The nybble must be already shifted up to the top 4 bits.

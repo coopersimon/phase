@@ -18,20 +18,20 @@ Below is a list of selected games and their status.
 - Diablo: Mostly OK
 - Dino Crisis: Shows first screen then locks up
 - Dragon Warrior 7: Mostly ok, some flickering and audio popping
-- Final Fantasy 7: Mostly ok, some flickering, characters appear with a bluish tint
+- Final Fantasy 7: Mostly ok, some flickering
 - Final Fantasy 8: Intro is OK, some sound issues (vibrato?), opening cutscene is stuttery and has glitchy sound
 - Final Fantasy 9: Broken cutscenes
 - Final Fantasy Tactics: Mostly OK
 - Front Mission 3: Mostly OK
-- Grand Theft Auto 2: Loads up OK, a few framebuffer issues
+- Grand Theft Auto 2: Mostly OK
 - Gran Turismo: Mostly OK
 - Gran Turismo 2: Tries to load from 1F801130 (just beyond the timers)
-- Metal Gear Solid: Mostly OK, some flickering, crashes trying to use ADPCM filter 7 (of 5)
+- Metal Gear Solid: Mostly OK, some flickering
 - PaRappa the Rapper: Mostly OK, some audio is a bit quiet
 - Resident Evil: Mostly OK, blending issues
 - Resident Evil 2: Mostly OK
 - Silent Hill: Uses multitap memcard then locks up
-- Spiderman: Audio sounds particularly bad, gameplay looks weird when polys get close to camera
+- Spiderman: Gameplay looks weird when polys get close to camera
 - Spyro the Dragon: Mostly OK
 - Suikoden: Mostly ok, flickering at top of screen.
 - Suikoden 2: Mostly OK

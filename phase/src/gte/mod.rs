@@ -324,7 +324,7 @@ impl GTE {
         self.regs[RGB0.idx()] = self.regs[RGB1.idx()];
         self.regs[RGB1.idx()] = self.regs[RGB2.idx()];
         let code = rgbc & 0xFF00_0000;
-        self.regs[RGB2.idx()] = code | (r << 16) | (g << 8) | b;
+        self.regs[RGB2.idx()] = code | (b << 16) | (g << 8) | r;
     }
 
     #[inline]
@@ -621,7 +621,7 @@ impl GTE {
     fn color_color(&mut self, shift: u8, ir_unsigned: bool, mac1: i32, mac2: i32, mac3: i32) {
         let rgbc = self.regs[Reg::RGBC.idx()];
         let mac1 = {
-            let r = ((rgbc >> 16) & 0xFF) as i64;
+            let r = (rgbc & 0xFF) as i64;
             let ir1 = self.set_ir1(mac1, ir_unsigned);
             self.set_mac1((ir1 * r) << 4, shift)
         };
@@ -631,7 +631,7 @@ impl GTE {
             self.set_mac2((ir2 * g) << 4, shift)
         };
         let mac3 = {
-            let b = (rgbc & 0xFF) as i64;
+            let b = ((rgbc >> 16) & 0xFF) as i64;
             let ir3 = self.set_ir3(mac3, ir_unsigned);
             self.set_mac3((ir3 * b) << 4, shift)
         };
@@ -644,7 +644,7 @@ impl GTE {
         let rgbc = self.regs[RGBC.idx()];
         let ir0 = self.get_reg_i16_lo(IR0) as i64;
         let r = {
-            let r = ((rgbc >> 16) & 0xFF) as i64;
+            let r = (rgbc & 0xFF) as i64;
             let mac1 = self.set_mac1((ir1 * r) << 4, 0) as i64;
             self.rfc_interpolate(shift, ir_unsigned, mac1, ir0)
         };
@@ -654,7 +654,7 @@ impl GTE {
             self.gfc_interpolate(shift, ir_unsigned, mac2, ir0)
         };
         let b = {
-            let b = (rgbc & 0xFF) as i64;
+            let b = ((rgbc >> 16) & 0xFF) as i64;
             let mac3 = self.set_mac3((ir3 * b) << 4, 0) as i64;
             self.bfc_interpolate(shift, ir_unsigned, mac3, ir0)
         };
@@ -750,7 +750,7 @@ impl GTE {
         use Reg::*;
         let ir0 = self.get_reg_i16_lo(IR0) as i64;
         let r = {
-            let r = ((rgbc >> 16) & 0xFF) as i64;
+            let r = (rgbc & 0xFF) as i64;
             let mac1 = r << 16;
             self.rfc_interpolate(shift, ir_unsigned, mac1, ir0)
         };
@@ -760,7 +760,7 @@ impl GTE {
             self.gfc_interpolate(shift, ir_unsigned, mac2, ir0)
         };
         let b = {
-            let b = (rgbc & 0xFF) as i64;
+            let b = ((rgbc >> 16) & 0xFF) as i64;
             let mac3 = b << 16;
             self.bfc_interpolate(shift, ir_unsigned, mac3, ir0)
         };
@@ -1168,4 +1168,3 @@ impl GTE {
         self.push_mac_color(ir_unsigned, self.regs[RGBC.idx()], mac1, mac2, mac3);
     }
 }
-
