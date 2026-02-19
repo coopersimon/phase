@@ -14,7 +14,7 @@ Below is a list of selected games and their status.
 - Crash Bandicoot: Mostly ok
 - Crash Bandicoot 2: Mostly ok
 - Crash Bandicoot 3: Mostly ok
-- Crash Team Racing: Locks up after displaying title screen
+- Crash Team Racing: Mostly OK, some seams and occasional flickering (depth issue?) also image is not centred, large black bar at bottom.
 - Diablo: Mostly OK
 - Dino Crisis: Shows first screen then locks up
 - Dragon Warrior 7: Mostly ok, some flickering and audio popping

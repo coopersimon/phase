@@ -28,6 +28,12 @@ const SPU_FIFO_SIZE: usize = 32;
 pub const CYCLES_PER_SAMPLE: usize = 0x300;
 const SAMPLE_PACKET_SIZE: usize = 32;
 
+const CD_LEFT_CAPTURE_START_ADDR: u32 = 0x000;
+const CD_RIGHT_CAPTURE_START_ADDR: u32 = 0x400;
+const VOICE_1_CAPTURE_START_ADDR: u32 = 0x800;
+const VOICE_3_CAPTURE_START_ADDR: u32 = 0xC00;
+const CAPTURE_SIZE: u32 = 0x400;
+
 /// Sound processing unit.
 pub struct SPU {
     voices:         [Voice; 24],
@@ -52,6 +58,12 @@ pub struct SPU {
     control:    SPUControl,
     status:     SPUStatus,
     irq_latch:  bool,
+
+    // Capture
+    cd_left_capture_addr:   u32,
+    cd_right_capture_addr:  u32,
+    voice_1_capture_addr:   u32,
+    voice_3_capture_addr:   u32,
 
     // Sample generation:
     cycle_count: usize,
@@ -95,6 +107,11 @@ impl SPU {
             status:     SPUStatus::empty(),
             irq_latch:  false,
 
+            cd_left_capture_addr:   CD_LEFT_CAPTURE_START_ADDR,
+            cd_right_capture_addr:  CD_RIGHT_CAPTURE_START_ADDR,
+            voice_1_capture_addr:   VOICE_1_CAPTURE_START_ADDR,
+            voice_3_capture_addr:   VOICE_3_CAPTURE_START_ADDR,
+
             cycle_count: 0,
             noise_level: 0,
             noise_timer: 0,
@@ -129,7 +146,7 @@ impl SPU {
         }
 
         self.cycle_count += cycles;
-        if self.cycle_count > CYCLES_PER_SAMPLE {
+        if self.cycle_count >= CYCLES_PER_SAMPLE {
             self.cycle_count -= CYCLES_PER_SAMPLE;
 
             self.clock_noise();
@@ -571,19 +588,39 @@ impl SPU {
         let mut output = Stereo::<i32>::EQUILIBRIUM;
         let mut prev_voice_vol = 0;
         let mut reverb_input = Stereo::<i32>::EQUILIBRIUM;
-        for voice in self.voices.iter_mut() {
-            let (voice_out, irq) = voice.clock(&self.ram, irq_addr, prev_voice_vol, self.noise_level);
+        for (i, voice) in self.voices.iter_mut().enumerate() {
+            let (voice_out, voice_irq) = voice.clock(&self.ram, irq_addr, prev_voice_vol, self.noise_level);
             output[0] += voice_out[0];
             output[1] += voice_out[1];
             if voice.get_echo() {
                 reverb_input[0] += voice_out[0];
                 reverb_input[1] += voice_out[1];
             }
+            let current_level = voice.get_current_level();
+            let irq = if i == 1 {
+                let capture_irq = self.voice_1_capture_addr == irq_addr;
+                self.ram.write_halfword(self.voice_1_capture_addr, current_level as u16);
+                self.voice_1_capture_addr += 2;
+                if self.voice_1_capture_addr >= (VOICE_1_CAPTURE_START_ADDR + CAPTURE_SIZE) {
+                    self.voice_1_capture_addr = VOICE_1_CAPTURE_START_ADDR;
+                }
+                voice_irq || capture_irq
+            } else if i == 3 {
+                let capture_irq = self.voice_3_capture_addr == irq_addr;
+                self.ram.write_halfword(self.voice_3_capture_addr, current_level as u16);
+                self.voice_3_capture_addr += 2;
+                if self.voice_3_capture_addr >= (VOICE_3_CAPTURE_START_ADDR + CAPTURE_SIZE) {
+                    self.voice_3_capture_addr = VOICE_3_CAPTURE_START_ADDR;
+                }
+                voice_irq || capture_irq
+            } else {
+                voice_irq
+            };
             if irq && self.control.contains(SPUControl::IRQEnable) && !self.status.contains(SPUStatus::IRQ) {
                 self.status.insert(SPUStatus::IRQ);
                 self.irq_latch = true;
             }
-            prev_voice_vol = voice.get_adsr_vol();
+            prev_voice_vol = current_level;
         }
 
         if self.control.contains(SPUControl::CDAudioEnable) {
@@ -605,6 +642,21 @@ impl SPU {
             if self.control.contains(SPUControl::CDAudioReverb) {
                 reverb_input[0] += cd_audio_left;
                 reverb_input[1] += cd_audio_right;
+            }
+            let irq = self.cd_left_capture_addr == irq_addr || self.cd_right_capture_addr == irq_addr;
+            self.ram.write_halfword(self.cd_left_capture_addr, cd_audio_left as i16 as u16);
+            self.cd_left_capture_addr += 2;
+            if self.cd_left_capture_addr >= (CD_LEFT_CAPTURE_START_ADDR + CAPTURE_SIZE) {
+                self.cd_left_capture_addr = CD_LEFT_CAPTURE_START_ADDR;
+            }
+            self.ram.write_halfword(self.cd_right_capture_addr, cd_audio_right as i16 as u16);
+            self.cd_right_capture_addr += 2;
+            if self.cd_right_capture_addr >= (CD_RIGHT_CAPTURE_START_ADDR + CAPTURE_SIZE) {
+                self.cd_right_capture_addr = CD_RIGHT_CAPTURE_START_ADDR;
+            }
+            if irq && self.control.contains(SPUControl::IRQEnable) && !self.status.contains(SPUStatus::IRQ) {
+                self.status.insert(SPUStatus::IRQ);
+                self.irq_latch = true;
             }
         }
 

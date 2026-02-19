@@ -29,6 +29,8 @@ pub struct Voice {
     adpcm_gen:      ADPCMDecoder,
     current_addr:   u32,
     pitch_count:    usize,
+    // Sample mixed with ADSR, but before stereo sweep
+    current_level:  i16,
 
     adsr_gen:       ADSRGenerator, // 8, A
 }
@@ -113,9 +115,9 @@ impl Voice {
         self.vol.get_right_current()
     }
 
-    /// Get current ADSR vol, for noise and pitch mod.
-    pub fn get_adsr_vol(&self) -> i16 {
-        self.adsr_vol as i16
+    /// Get current level, for pitch mod and capture.
+    pub fn get_current_level(&self) -> i16 {
+        self.current_level
     }
 
     /// Clock a sample to advance audio decoding.
@@ -201,6 +203,7 @@ impl Voice {
         let adsr_vol = self.adsr_gen.step();
         self.adsr_vol = adsr_vol as u16;
         let env_sample = (sample * adsr_vol as i32) >> 16;
+        self.current_level = env_sample as i16;
         let sweep_vol = self.vol.get_vol();
         let sample_left = (env_sample * sweep_vol.left as i32) >> 16;
         let sample_right = (env_sample * sweep_vol.right as i32) >> 16;
