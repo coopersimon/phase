@@ -8,9 +8,9 @@ Below is a list of selected games and their status.
 
 - Ape Escape: Requires dualshock
 - Boku no Natsuyasumi: Doesn't boot
-- Castlevania: Symphony of the Night: If left for a long time, plays Konami title then locks up.
+- Castlevania: Symphony of the Night: Title loads, then tries to use invalid GPU command
 - Chrono Cross: Mostly OK, some blending issues.
-- Chrono Trigger: Starts OK, some 2d graphics glitches, then locks up before gameplay begins
+- Chrono Trigger: Mostly OK
 - Crash Bandicoot: Mostly ok
 - Crash Bandicoot 2: Mostly ok
 - Crash Bandicoot 3: Mostly ok
@@ -20,25 +20,25 @@ Below is a list of selected games and their status.
 - Dragon Warrior 7: Mostly ok, some flickering and audio popping
 - Final Fantasy 7: Mostly ok, some flickering, characters appear with a bluish tint
 - Final Fantasy 8: Intro is OK, some sound issues (vibrato?), opening cutscene is stuttery and has glitchy sound
-- Final Fantasy 9: Shows a title with some glitchy graphics then tries to audio seek
-- Final Fantasy Tactics: Mostly OK but menu seems to lock up after a short while.
+- Final Fantasy 9: Broken cutscenes
+- Final Fantasy Tactics: Mostly OK
 - Front Mission 3: Mostly OK
 - Grand Theft Auto 2: Loads up OK, a few framebuffer issues
 - Gran Turismo: Mostly OK
 - Gran Turismo 2: Tries to load from 1F801130 (just beyond the timers)
 - Metal Gear Solid: Mostly OK, some blending issues and flickering
-- PaRappa the Rapper: Loads up, sound OK, videos don't play
+- PaRappa the Rapper: Mostly OK, some audio is a bit quiet
 - Resident Evil: Mostly OK, blending issues
-- Resident Evil 2: Mostly OK, intro cutscene is a bit broken if not skipped. Intro video is OK. gameplay seems OK
+- Resident Evil 2: Mostly OK
 - Silent Hill: Uses multitap memcard then locks up
-- Spiderman: Similar to THPS 1+2, audio sounds particularly bad.
+- Spiderman: Audio sounds particularly bad, gameplay looks weird when polys get close to camera
 - Spyro the Dragon: Mostly OK
 - Suikoden: Mostly ok, flickering at top of screen.
 - Suikoden 2: Shows a title then plays audio without a video, and locks up
 - Tekken 3: Mostly ok!
 - Tomb Raider: Mostly ok
-- Tony Hawk's Pro Skater: Shows some video then locks up. If skipped quickly, menus are ok, but gameplay is totally broken.
-- Tony Hawk's Pro Skater 2: Very similar to THPS1, except character select menu looks off.
+- Tony Hawk's Pro Skater: Gameplay is quite broken, level geometry is quite broken when close to camera.
+- Tony Hawk's Pro Skater 2: Very similar to THPS1
 - Twisted Metal: Mostly OK: gameplay looks a little weird maybe, eventually uses GP0 command 0x08BD0040 (???)
 - Vagrant Story: Mostly ok before crash due to VRAM copy issue
 - Wild ARMS: Mostly ok!

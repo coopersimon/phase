@@ -96,6 +96,18 @@ impl DMA {
     pub fn get_transfer(&mut self) -> Option<DMATransfer> {
         if let Some(chan_idx) = self.current_active_channel {
             let channel = &mut self.channels[chan_idx];
+            if channel.chop_words > 0 {
+                if channel.chop_words_counter == 0 {
+                    channel.chop_cycles_counter -= 1;
+                    if channel.chop_cycles_counter == 0 {
+                        channel.chop_words_counter = channel.chop_words;
+                        channel.chop_cycles_counter = channel.chop_cycles;
+                    }
+                    return None;
+                } else {
+                    channel.chop_words_counter -= 1;
+                }
+            }
             channel.control.remove(ChannelControl::StartTrigger);
             let transfer = Some(DMATransfer {
                 addr:       channel.current_addr,
@@ -164,12 +176,11 @@ impl DMA {
         self.interrupt = input.intersection(DMAInterrupt::Writable);
         self.interrupt.insert(flags);
         self.interrupt.remove(input.intersection(DMAInterrupt::IRQFlags)); // Acknowledge IRQs.
-        if self.interrupt.contains(DMAInterrupt::ForceIRQ) ||
-            (self.interrupt.contains(DMAInterrupt::EnableIRQ) && self.interrupt.intersects(DMAInterrupt::IRQFlags)) {
-            self.interrupt.insert(DMAInterrupt::InterruptReq);
-            if !irq { // Mark pending IRQ if request bit changes 0 => 1.
-                self.irq_pending = true;
-            }
+        let irq_setting = self.interrupt.contains(DMAInterrupt::ForceIRQ) ||
+            (self.interrupt.contains(DMAInterrupt::EnableIRQ) && self.interrupt.intersects(DMAInterrupt::IRQFlags));
+        self.interrupt.set(DMAInterrupt::InterruptReq, irq_setting);
+        if self.interrupt.contains(DMAInterrupt::InterruptReq) && !irq {
+            self.irq_pending = true;
         }
     }
 
@@ -179,11 +190,10 @@ impl DMA {
         self.interrupt.remove(mask);
         let to_set = DMAInterrupt::from_bits_truncate((data as u32) << 16);
         self.interrupt.insert(to_set);
-        if self.interrupt.contains(DMAInterrupt::EnableIRQ) && self.interrupt.intersects(DMAInterrupt::IRQFlags) {
-            self.interrupt.insert(DMAInterrupt::InterruptReq);
-            if !irq { // Mark pending IRQ if request bit changes 0 => 1.
-                self.irq_pending = true;
-            }
+        let irq_setting = self.interrupt.contains(DMAInterrupt::EnableIRQ) && self.interrupt.intersects(DMAInterrupt::IRQFlags);
+        self.interrupt.set(DMAInterrupt::InterruptReq, irq_setting);
+        if self.interrupt.contains(DMAInterrupt::InterruptReq) && !irq {
+            self.irq_pending = true;
         }
     }
 
@@ -306,6 +316,10 @@ impl MemInterface for DMA {
             _ => panic!("trying to write byte to DMA address {:X}", addr),
         }
     }
+
+    fn write_halfword(&mut self, _addr: u32, _data: u16) {
+        panic!("not allowed.");
+    }
 }
 
 bitflags::bitflags! {
@@ -368,6 +382,11 @@ struct DMAChannel {
     current_block_count: u32,
     next_list_addr: Option<u32>,
     active: bool,
+
+    chop_words: usize,
+    chop_words_counter: usize,
+    chop_cycles: usize,
+    chop_cycles_counter: usize,
 }
 
 impl DMAChannel {
@@ -382,6 +401,11 @@ impl DMAChannel {
             current_block_count: 0,
             next_list_addr: None,
             active: false,
+
+            chop_words: 0,
+            chop_words_counter: 0,
+            chop_cycles: 0,
+            chop_cycles_counter: 0,
         }
     }
 
@@ -395,6 +419,17 @@ impl DMAChannel {
 
     fn set_control(&mut self, data: u32) {
         self.control = ChannelControl::from_bits_truncate(data);
+        if self.control.contains(ChannelControl::ChopEnable) {
+            let chop_dma_window = 1 << (self.control.intersection(ChannelControl::ChopDMAWindowSize).bits() >> 16);
+            let chop_cpu_window = 1 << (self.control.intersection(ChannelControl::ChopCPUWindowSize).bits() >> 20);
+            self.chop_words = chop_dma_window;
+            self.chop_cycles = chop_cpu_window;
+            self.chop_words_counter = self.chop_words;
+            self.chop_cycles_counter = self.chop_cycles;
+        } else {
+            self.chop_words = 0;
+            self.chop_cycles = 0;
+        }
         if self.control.contains(ChannelControl::StartTrigger) {
             self.start_sync_mode(DMA_IMM_MODE);
         }
@@ -482,6 +517,7 @@ impl DMAChannel {
 bitflags::bitflags! {
     #[derive(Clone, Copy)]
     struct ChannelControl: u32 {
+        const UnknownBits       = bits![29, 30];
         const StartTrigger      = bit!(28);
         const StartBusy         = bit!(24);
         const ChopCPUWindowSize = bits![20, 21, 22];
