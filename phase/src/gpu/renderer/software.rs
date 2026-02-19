@@ -187,7 +187,7 @@ impl RendererImpl for SoftwareRenderer {
         self.rgb24 = rgb24;
     }
 
-    fn set_draw_mode(&mut self, trans_mode: super::TransparencyMode, dither: bool) {
+    fn set_draw_mode(&mut self, trans_mode: TransparencyMode, dither: bool) {
         self.trans_mode = trans_mode;
         self.dither = dither;
     }
@@ -230,15 +230,17 @@ impl RendererImpl for SoftwareRenderer {
     }
 
     fn draw_triangle_flat(&mut self, vertices: &[Vertex], color: Color, transparent: bool) {
+        let trans_mode = if transparent {Some(self.trans_mode)} else {None};
         self.rasterize_triangle(vertices, |renderer: &mut Self, _: &Line, addr: usize| {
-            renderer.write_pixel(addr, &color, transparent);
+            renderer.write_pixel(addr, &color, trans_mode);
         });
     }
 
     fn draw_triangle_shaded(&mut self, vertices: &[Vertex], transparent: bool) {
+        let trans_mode = if transparent {Some(self.trans_mode)} else {None};
         self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
             let color = line.get_color();
-            renderer.write_dithered_pixel(addr, &color, transparent);
+            renderer.write_dithered_pixel(addr, &color, trans_mode);
         });
     }
 
@@ -247,7 +249,8 @@ impl RendererImpl for SoftwareRenderer {
             let tex_color = renderer.tex_lookup(&line.get_tex_coords(), tex_info);
             if tex_color != 0 {
                 let transparent = transparent && test_bit!(tex_color, 15);
-                renderer.write_pixel(addr, &Color::from_rgb15(tex_color), transparent);
+                let trans_mode = if transparent {Some(tex_info.trans_mode)} else {None};
+                renderer.write_pixel(addr, &Color::from_rgb15(tex_color), trans_mode);
             }
         });
     }
@@ -259,12 +262,14 @@ impl RendererImpl for SoftwareRenderer {
                 let color = line.get_color();
                 let frag_color = color.blend(&Color::from_rgb15(tex_color), !renderer.set_mask_bit);
                 let transparent = transparent && test_bit!(tex_color, 15);
-                renderer.write_dithered_pixel(addr, &frag_color, transparent);
+                let trans_mode = if transparent {Some(tex_info.trans_mode)} else {None};
+                renderer.write_dithered_pixel(addr, &frag_color, trans_mode);
             }
         });
     }
 
     fn draw_rectangle(&mut self, color: Color, top_left: Coord, size: Size, transparent: bool) {
+        let trans_mode = if transparent {Some(self.trans_mode)} else {None};
         let top = top_left.y + self.draw_offset.y;
         let bottom = top + size.height as i16;
         let left = top_left.x + self.draw_offset.x;
@@ -277,7 +282,7 @@ impl RendererImpl for SoftwareRenderer {
             let line_addr = (y as usize) * 1024;
             for x in x_min..x_max {
                 let addr = line_addr + (x as usize);
-                self.write_pixel(addr, &color, transparent);
+                self.write_pixel(addr, &color, trans_mode);
             }
         }
     }
@@ -314,7 +319,8 @@ impl RendererImpl for SoftwareRenderer {
                     let addr = line_addr + (x as usize);
                     let frag_color = color.blend(&Color::from_rgb15(tex_color), !self.set_mask_bit);
                     let transparent = transparent && test_bit!(tex_color, 15);
-                    self.write_pixel(addr, &frag_color, transparent);
+                    let trans_mode = if transparent {Some(tex_info.trans_mode)} else {None};
+                    self.write_pixel(addr, &frag_color, trans_mode);
                 }
                 current_tex_coord.s += 1;
             }
@@ -324,6 +330,7 @@ impl RendererImpl for SoftwareRenderer {
     }
 
     fn draw_line(&mut self, vertex_a: &Vertex, vertex_b: &Vertex, transparent: bool) {
+        let trans_mode = if transparent {Some(self.trans_mode)} else {None};
         // X or Y major line:
         let dx = (vertex_a.coord.x - vertex_b.coord.x).abs();
         let dy = (vertex_a.coord.y - vertex_b.coord.y).abs();
@@ -343,7 +350,7 @@ impl RendererImpl for SoftwareRenderer {
                 if x >= self.drawing_area.left &&
                     y >= self.drawing_area.top && y < self.drawing_area.bottom {
                     let addr = (y as usize) * 1024 + (x as usize);
-                    self.write_dithered_pixel(addr, &color.get(), transparent);
+                    self.write_dithered_pixel(addr, &color.get(), trans_mode);
                 }
                 if delta > 0 {
                     y += y_step;
@@ -369,7 +376,7 @@ impl RendererImpl for SoftwareRenderer {
                 if y >= self.drawing_area.top &&
                     x >= self.drawing_area.left && x < self.drawing_area.right {
                     let addr = (y as usize) * 1024 + (x as usize);
-                    self.write_dithered_pixel(addr, &color.get(), transparent);
+                    self.write_dithered_pixel(addr, &color.get(), trans_mode);
                 }
                 if delta > 0 {
                     x += x_step;
@@ -386,7 +393,7 @@ impl RendererImpl for SoftwareRenderer {
 // Internal
 impl SoftwareRenderer {
     #[inline(always)]
-    fn write_dithered_pixel(&mut self, addr: usize, color: &Color, transparent: bool) {
+    fn write_dithered_pixel(&mut self, addr: usize, color: &Color, trans_mode: Option<TransparencyMode>) {
         let dithered_color = if self.dither {
             let x = addr % 4;
             let y = (addr / 1024) % 4;
@@ -395,15 +402,15 @@ impl SoftwareRenderer {
         } else {
             color.clone()
         };
-        self.write_pixel(addr, &dithered_color, transparent);
+        self.write_pixel(addr, &dithered_color, trans_mode);
     }
 
     #[inline(always)]
-    fn write_pixel(&mut self, addr: usize, color: &Color, transparent: bool) {
+    fn write_pixel(&mut self, addr: usize, color: &Color, trans_mode: Option<TransparencyMode>) {
         if !self.check_mask_bit || !test_bit!(self.vram[addr], 15) {
-            let color = if transparent {
+            let color = if let Some(trans_mode) = trans_mode {
                 let base_color = Color::from_rgb15(self.vram[addr]);
-                self.trans_mode.blend(&base_color, color)
+                trans_mode.blend(&base_color, color)
             } else {
                 *color
             };

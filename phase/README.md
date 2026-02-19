@@ -9,7 +9,7 @@ Below is a list of selected games and their status.
 - Ape Escape: Requires dualshock
 - Boku no Natsuyasumi: Doesn't boot
 - Castlevania: Symphony of the Night: Title loads, then tries to use invalid GPU command
-- Chrono Cross: Mostly OK, some blending issues.
+- Chrono Cross: Mostly OK, some flickering, title screen has some issues
 - Chrono Trigger: Mostly OK
 - Crash Bandicoot: Mostly ok
 - Crash Bandicoot 2: Mostly ok
@@ -26,7 +26,7 @@ Below is a list of selected games and their status.
 - Grand Theft Auto 2: Loads up OK, a few framebuffer issues
 - Gran Turismo: Mostly OK
 - Gran Turismo 2: Tries to load from 1F801130 (just beyond the timers)
-- Metal Gear Solid: Mostly OK, some blending issues and flickering
+- Metal Gear Solid: Mostly OK, some flickering, crashes trying to use ADPCM filter 7 (of 5)
 - PaRappa the Rapper: Mostly OK, some audio is a bit quiet
 - Resident Evil: Mostly OK, blending issues
 - Resident Evil 2: Mostly OK
@@ -34,13 +34,13 @@ Below is a list of selected games and their status.
 - Spiderman: Audio sounds particularly bad, gameplay looks weird when polys get close to camera
 - Spyro the Dragon: Mostly OK
 - Suikoden: Mostly ok, flickering at top of screen.
-- Suikoden 2: Shows a title then plays audio without a video, and locks up
+- Suikoden 2: Mostly OK
 - Tekken 3: Mostly ok!
 - Tomb Raider: Mostly ok
 - Tony Hawk's Pro Skater: Gameplay is quite broken, level geometry is quite broken when close to camera.
 - Tony Hawk's Pro Skater 2: Very similar to THPS1
 - Twisted Metal: Mostly OK: gameplay looks a little weird maybe, eventually uses GP0 command 0x08BD0040 (???)
-- Vagrant Story: Mostly ok before crash due to VRAM copy issue
+- Vagrant Story: Mostly ok before crash due to invalid GP0 command.
 - Wild ARMS: Mostly ok!
 - WipEout: Opening titles OK, tries to access serial port
 

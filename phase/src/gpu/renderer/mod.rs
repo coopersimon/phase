@@ -834,6 +834,7 @@ struct TexInfo {
     s_base: usize,
     t_base: usize,
     tex_mode: TexMode,
+    trans_mode: TransparencyMode,
     palette_coord: PaletteCoord,
 }
 
@@ -850,10 +851,18 @@ impl TexInfo {
             1 => TexMode::Palette8,
             _ => TexMode::Direct,
         };
+        let trans_mode = match (draw_mode >> 5) & 0x3 {
+            0b00 => TransparencyMode::Average,
+            0b01 => TransparencyMode::Add,
+            0b10 => TransparencyMode::Subtract,
+            0b11 => TransparencyMode::Combine,
+            _ => unreachable!()
+        };
         Self {
             s_base: ((draw_mode & 0x0F) as usize) << 6,
             t_base: ((draw_mode & 0x10) as usize) << 4,
             tex_mode,
+            trans_mode,
             palette_coord: palette,
         }
     }
