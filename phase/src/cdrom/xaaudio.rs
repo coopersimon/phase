@@ -157,8 +157,8 @@ impl VolumeMap {
         let left_to_right = ((left as i32) * (self.left_to_right as i32)) >> 7;
         let right_to_left = ((right as i32) * (self.right_to_left as i32)) >> 7;
         let right_to_right = ((right as i32) * (self.right_to_right as i32)) >> 7;
-        let left_out = (left_to_left + right_to_left) as i16; // TODO: saturate + clamp?
-        let right_out = (left_to_right + right_to_right) as i16;
+        let left_out = (left_to_left + right_to_left).clamp(-0x7FFF, 0x7FFF) as i16;
+        let right_out = (left_to_right + right_to_right).clamp(-0x7FFF, 0x7FFF) as i16;
         [left_out, right_out]
     }
 
@@ -166,8 +166,8 @@ impl VolumeMap {
     fn apply_mono(&self, sample: i16) -> Stereo<i16> {
         let left_mul = (self.left_to_left as i32) + (self.right_to_left as i32);
         let right_mul = (self.left_to_right as i32) + (self.right_to_right as i32);
-        let left_out = ((sample as i32) * left_mul) >> 7;
-        let right_out = ((sample as i32) * right_mul) >> 7;
+        let left_out = (((sample as i32) * left_mul) >> 7).clamp(-0x7FFF, 0x7FFF);
+        let right_out = (((sample as i32) * right_mul) >> 7).clamp(-0x7FFF, 0x7FFF);
         [left_out as i16, right_out as i16]
     }
 }
