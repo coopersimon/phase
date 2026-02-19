@@ -21,6 +21,7 @@ const VRAM_SIZE: usize = 1024 * 1024;
 
 // TODO: make this configurable.
 const DEBUG_MODE: bool = false;
+const WIREFRAME_MODE: bool = false;
 
 #[derive(Debug)]
 pub enum RendererCmd {
@@ -655,6 +656,14 @@ impl Coord {
     }
 
     #[inline(always)]
+    fn vertex_clip(self) -> Self {
+        Self {
+            x: (self.x << 5) >> 5,
+            y: (self.y << 5) >> 5,
+        }
+    }
+
+    #[inline(always)]
     fn copy_clip(self) -> Self {
         Self {
             x: self.x & 0x3FF,
@@ -796,7 +805,7 @@ impl Vertex {
     #[inline(always)]
     fn from_xy(xy: u32) -> Self {
         Self {
-            coord: Coord::from_xy(xy),
+            coord: Coord::from_xy(xy).vertex_clip(),
             col: Color::default(),
             tex: TexCoord { s: 0, t: 0 },
         }

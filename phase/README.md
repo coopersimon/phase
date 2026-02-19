@@ -26,18 +26,19 @@ Below is a list of selected games and their status.
 - Grand Theft Auto 2: Mostly OK
 - Gran Turismo: Mostly OK
 - Gran Turismo 2: Tries to load from 1F801130 (just beyond the timers)
+- Medal of Honor: Mostly OK
 - Metal Gear Solid: Mostly OK, some flickering
 - PaRappa the Rapper: Mostly OK, some audio is a bit quiet
-- Resident Evil: Mostly OK, blending issues
+- Resident Evil: Mostly OK
 - Resident Evil 2: Mostly OK
 - Silent Hill: Uses multitap memcard then locks up
-- Spiderman: Gameplay looks weird when polys get close to camera
+- Spiderman: Mostly OK
 - Spyro the Dragon: Mostly OK
 - Suikoden: Mostly ok, flickering at top of screen.
 - Suikoden 2: Mostly OK
 - Tekken 3: Mostly ok!
 - Tomb Raider: Mostly ok
-- Tony Hawk's Pro Skater: Gameplay is quite broken, level geometry is quite broken when close to camera.
+- Tony Hawk's Pro Skater: Mostly OK, sometimes locks up when loading level
 - Tony Hawk's Pro Skater 2: Very similar to THPS1
 - Twisted Metal: Mostly OK: gameplay looks a little weird maybe, eventually uses GP0 command 0x08BD0040 (???)
 - Vagrant Story: Mostly ok - looks like outline of map in bottom right of gameplay blends with itself

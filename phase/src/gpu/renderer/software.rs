@@ -230,42 +230,58 @@ impl RendererImpl for SoftwareRenderer {
     }
 
     fn draw_triangle_flat(&mut self, vertices: &[Vertex], color: Color, transparent: bool) {
-        let trans_mode = if transparent {Some(self.trans_mode)} else {None};
-        self.rasterize_triangle(vertices, |renderer: &mut Self, _: &Line, addr: usize| {
-            renderer.write_pixel(addr, &color, trans_mode);
-        });
+        if !super::WIREFRAME_MODE {
+            let trans_mode = if transparent {Some(self.trans_mode)} else {None};
+            self.rasterize_triangle(vertices, |renderer: &mut Self, _: &Line, addr: usize| {
+                renderer.write_pixel(addr, &color, trans_mode);
+            });
+        } else {
+            self.draw_wireframe_triangle(vertices, transparent);
+        }
     }
 
     fn draw_triangle_shaded(&mut self, vertices: &[Vertex], transparent: bool) {
-        let trans_mode = if transparent {Some(self.trans_mode)} else {None};
-        self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
-            let color = line.get_color();
-            renderer.write_dithered_pixel(addr, &color, trans_mode);
-        });
+        if !super::WIREFRAME_MODE {
+            let trans_mode = if transparent {Some(self.trans_mode)} else {None};
+            self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
+                let color = line.get_color();
+                renderer.write_dithered_pixel(addr, &color, trans_mode);
+            });
+        } else {
+            self.draw_wireframe_triangle(vertices, transparent);
+        }
     }
 
     fn draw_triangle_tex(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool) {
-        self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
-            let tex_color = renderer.tex_lookup(&line.get_tex_coords(), tex_info);
-            if tex_color != 0 {
-                let transparent = transparent && test_bit!(tex_color, 15);
-                let trans_mode = if transparent {Some(tex_info.trans_mode)} else {None};
-                renderer.write_pixel(addr, &Color::from_rgb15(tex_color), trans_mode);
-            }
-        });
+        if !super::WIREFRAME_MODE {
+            self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
+                let tex_color = renderer.tex_lookup(&line.get_tex_coords(), tex_info);
+                if tex_color != 0 {
+                    let transparent = transparent && test_bit!(tex_color, 15);
+                    let trans_mode = if transparent {Some(tex_info.trans_mode)} else {None};
+                    renderer.write_pixel(addr, &Color::from_rgb15(tex_color), trans_mode);
+                }
+            });
+        } else {
+            self.draw_wireframe_triangle(vertices, transparent);
+        }
     }
 
     fn draw_triangle_tex_blended(&mut self, vertices: &[Vertex], tex_info: &TexInfo, transparent: bool) {
-        self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
-            let tex_color = renderer.tex_lookup(&line.get_tex_coords(), tex_info);
-            if tex_color != 0 {
-                let color = line.get_color();
-                let frag_color = color.blend(&Color::from_rgb15(tex_color), !renderer.set_mask_bit);
-                let transparent = transparent && test_bit!(tex_color, 15);
-                let trans_mode = if transparent {Some(tex_info.trans_mode)} else {None};
-                renderer.write_dithered_pixel(addr, &frag_color, trans_mode);
-            }
-        });
+        if !super::WIREFRAME_MODE {
+            self.rasterize_triangle(vertices, |renderer: &mut Self, line: &Line, addr: usize| {
+                let tex_color = renderer.tex_lookup(&line.get_tex_coords(), tex_info);
+                if tex_color != 0 {
+                    let color = line.get_color();
+                    let frag_color = color.blend(&Color::from_rgb15(tex_color), !renderer.set_mask_bit);
+                    let transparent = transparent && test_bit!(tex_color, 15);
+                    let trans_mode = if transparent {Some(tex_info.trans_mode)} else {None};
+                    renderer.write_dithered_pixel(addr, &frag_color, trans_mode);
+                }
+            });
+        } else {
+            self.draw_wireframe_triangle(vertices, transparent);
+        }
     }
 
     fn draw_rectangle(&mut self, color: Color, top_left: Coord, size: Size, transparent: bool) {
@@ -392,6 +408,12 @@ impl RendererImpl for SoftwareRenderer {
 
 // Internal
 impl SoftwareRenderer {
+    fn draw_wireframe_triangle(&mut self, vertices: &[Vertex], transparent: bool) {
+        self.draw_line(&vertices[0], &vertices[1], transparent);
+        self.draw_line(&vertices[1], &vertices[2], transparent);
+        self.draw_line(&vertices[2], &vertices[0], transparent);
+    }
+
     #[inline(always)]
     fn write_dithered_pixel(&mut self, addr: usize, color: &Color, trans_mode: Option<TransparencyMode>) {
         let dithered_color = if self.dither {
