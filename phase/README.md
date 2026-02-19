@@ -8,7 +8,7 @@ Below is a list of selected games and their status.
 
 - Ape Escape: Requires dualshock
 - Boku no Natsuyasumi: Doesn't boot
-- Castlevania: Symphony of the Night: Title loads, then tries to use invalid GPU command
+- Castlevania: Symphony of the Night: Titles ok, in-game UI is black, characters appear incorrectly lit
 - Chrono Cross: Mostly OK, some flickering, title screen has some issues
 - Chrono Trigger: Mostly OK
 - Crash Bandicoot: Mostly ok
@@ -40,7 +40,7 @@ Below is a list of selected games and their status.
 - Tony Hawk's Pro Skater: Gameplay is quite broken, level geometry is quite broken when close to camera.
 - Tony Hawk's Pro Skater 2: Very similar to THPS1
 - Twisted Metal: Mostly OK: gameplay looks a little weird maybe, eventually uses GP0 command 0x08BD0040 (???)
-- Vagrant Story: Mostly ok before crash due to invalid GP0 command.
+- Vagrant Story: Mostly ok - looks like outline of map in bottom right of gameplay blends with itself
 - Wild ARMS: Mostly ok!
 - WipEout: Opening titles OK, tries to access serial port
 
