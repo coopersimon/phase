@@ -4,7 +4,7 @@ use crate::{
 };
 
 const DIGITAL_INFO: u16 = 0x5A41;
-const ANALOG_INFO: u16 = 0x5A73;
+pub const ANALOG_INFO: u16 = 0x5A73;
 
 #[derive(Clone, Copy)]
 pub struct ControllerState {
@@ -58,15 +58,23 @@ impl ControllerState {
     pub fn get_binary(&self, data: &mut [u16; 4]) {
         data[0] = self.info;
         data[1] = self.buttons.bits();
-        if let Some(left) = self.left_stick {
-            data[2] = left.get_binary();
+        if let Some(right) = self.right_stick {
+            data[2] = right.get_binary();
         } else {
             data[2] = 0x0000;
         }
-        if let Some(right) = self.right_stick {
-            data[3] = right.get_binary();
+        if let Some(left) = self.left_stick {
+            data[3] = left.get_binary();
         } else {
             data[3] = 0x0000;
+        }
+    }
+
+    pub fn enable_analog_mode(&mut self, analog: bool) {
+        if analog {
+            self.info = ANALOG_INFO;
+        } else {
+            self.info = DIGITAL_INFO;
         }
     }
 }

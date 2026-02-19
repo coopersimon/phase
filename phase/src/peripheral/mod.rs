@@ -517,7 +517,25 @@ impl PeripheralPort {
                     if controller.config_pending {
                         controller.config_mode = true;
                     }
-                    (TransferMode::None, controller.output_data[1].to_le_bytes()[1])
+                    // TODO: this is a bit horrible...
+                    let mode = if controller.output_data[0] == controller::ANALOG_INFO {
+                        TransferMode::Controller(4)
+                    } else {
+                        TransferMode::None
+                    };
+                    (mode, controller.output_data[1].to_le_bytes()[1])
+                },
+                4 => {
+                    (TransferMode::Controller(5), controller.output_data[2].to_le_bytes()[0])
+                },
+                5 => {
+                    (TransferMode::Controller(6), controller.output_data[2].to_le_bytes()[1])
+                },
+                6 => {
+                    (TransferMode::Controller(7), controller.output_data[3].to_le_bytes()[0])
+                },
+                7 => {
+                    (TransferMode::None, controller.output_data[3].to_le_bytes()[1])
                 },
                 _ => unreachable!()
             }
@@ -561,8 +579,11 @@ impl PeripheralPort {
     }
 
     fn trigger_irq(&mut self) {
-        self.irq_latch = true;
+        let irq = self.status.contains(JoypadStatus::IRQ);
         self.status.insert(JoypadStatus::IRQ);
+        if !irq {
+            self.irq_latch = true;
+        }
     }
 }
 

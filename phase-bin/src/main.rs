@@ -38,6 +38,9 @@ struct Args {
 
     #[arg(short, long)]
     mute: bool,
+
+    #[arg(short, long)]
+    analog: bool,
 }
 
 fn main() {
@@ -53,6 +56,11 @@ fn main() {
     }
     if let Some(memcard2) = args.memcard2 {
         playstation.insert_mem_card(memcard2.try_into().expect("invalid memcard2 path"), Port::Two);
+    }
+    if args.analog {
+        playstation.attach_controller(ControllerType::Analog, Port::One);
+    } else {
+        playstation.attach_controller(ControllerType::Digital, Port::One);
     }
 
     if args.debug {
@@ -271,7 +279,6 @@ impl App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         self.console.run_cpu();
-        self.console.attach_controller(ControllerType::Digital, Port::One);
         if let Some(disc) = self.inserted_disc.clone() {
             self.console.insert_cd(disc);
         }
@@ -385,8 +392,12 @@ impl ApplicationHandler for App {
                             ButtonReleased(button, _) => if let Some(button) = map_button(button) {
                                 self.console.press_button(Port::One, button, false);
                             },
-                            AxisChanged(axis, value, _) => if let Some(stick) = map_stick(axis) {
-                                self.console.update_stick_axis(Port::One, stick, value);
+                            AxisChanged(axis, value, _) => match axis {
+                                gilrs::Axis::LeftStickX  => self.console.update_stick_axis(Port::One, AnalogStickAxis::LeftX, value),
+                                gilrs::Axis::LeftStickY  => self.console.update_stick_axis(Port::One, AnalogStickAxis::LeftY, -value),
+                                gilrs::Axis::RightStickX => self.console.update_stick_axis(Port::One, AnalogStickAxis::RightX, value),
+                                gilrs::Axis::RightStickY => self.console.update_stick_axis(Port::One, AnalogStickAxis::RightY, -value),
+                                _ => {},
                             },
                             _ => {}
                         }

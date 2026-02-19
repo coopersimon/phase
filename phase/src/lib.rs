@@ -125,7 +125,10 @@ impl PlayStation {
     }
 
     /// Update value for stick and axis. Only relevant for analog controllers.
+    /// 
     /// The value should be between -1 and +1, with 0 the at-rest value.
+    /// On the X-axis, 1 is right and -1 is left.
+    /// On the Y-axis, 1 is bottom and -1 is top.
     pub fn update_stick_axis(&mut self, port: Port, stick: AnalogStickAxis, value: f32) {
         // TODO: more gracefully handle errors?
         let controller = match port {
