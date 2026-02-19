@@ -1,9 +1,10 @@
 use crate::{
     utils::bits::*,
-    ControllerType, Button
+    ControllerType, Button, AnalogStickAxis
 };
 
 const DIGITAL_INFO: u16 = 0x5A41;
+const ANALOG_INFO: u16 = 0x5A73;
 
 #[derive(Clone, Copy)]
 pub struct ControllerState {
@@ -21,6 +22,12 @@ impl ControllerState {
                 buttons: ControllerButtons::all(),
                 left_stick: None,
                 right_stick: None,
+            },
+            ControllerType::Analog => Self {
+                info: ANALOG_INFO,
+                buttons: ControllerButtons::all(),
+                left_stick: Some(StickAxis::default()),
+                right_stick: Some(StickAxis::default()),
             }
         }
     }
@@ -28,6 +35,24 @@ impl ControllerState {
     pub fn press_button(&mut self, button: Button, pressed: bool) {
         let bit = bit!(button as usize);
         self.buttons.set(ControllerButtons::from_bits_retain(bit), !pressed);
+    }
+
+    pub fn update_stick_axis(&mut self, stick: AnalogStickAxis, value: f32) {
+        let int_val = ((value + 1.0) * 128.0).clamp(0.0, 255.0) as u8;
+        match stick {
+            AnalogStickAxis::LeftX => if let Some(stick) = self.left_stick.as_mut() {
+                stick.x = int_val;
+            },
+            AnalogStickAxis::LeftY => if let Some(stick) = self.left_stick.as_mut() {
+                stick.y = int_val;
+            },
+            AnalogStickAxis::RightX => if let Some(stick) = self.right_stick.as_mut() {
+                stick.x = int_val;
+            },
+            AnalogStickAxis::RightY => if let Some(stick) = self.right_stick.as_mut() {
+                stick.y = int_val;
+            },
+        }
     }
 
     pub fn get_binary(&self, data: &mut [u16; 4]) {
@@ -50,6 +75,15 @@ impl ControllerState {
 pub struct StickAxis {
     x: u8,
     y: u8,
+}
+
+impl Default for StickAxis {
+    fn default() -> Self {
+        Self {
+            x: 0x80,
+            y: 0x80,
+        }
+    }
 }
 
 impl StickAxis {

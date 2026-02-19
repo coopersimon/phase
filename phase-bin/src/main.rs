@@ -11,6 +11,7 @@ use winit::{
     }, window::Window, keyboard::{PhysicalKey, KeyCode}
 };
 use cpal::traits::StreamTrait;
+use gilrs::{Gilrs};
 
 use std::path::PathBuf;
 
@@ -109,7 +110,9 @@ struct App {
     frame:           Frame,
     last_frame_time: chrono::DateTime<chrono::Utc>,
 
-    audio_stream: cpal::Stream
+    audio_stream: cpal::Stream,
+
+    controllers:    Gilrs,
 }
 
 impl App {
@@ -218,7 +221,9 @@ impl App {
             frame:           Frame::new(),
             last_frame_time: chrono::Utc::now(),
 
-            audio_stream: audio_stream
+            audio_stream: audio_stream,
+
+            controllers: Gilrs::new().unwrap(),
         }
     }
 
@@ -368,6 +373,24 @@ impl ApplicationHandler for App {
     
                     self.queue.submit([encoder.finish()]);
                     frame.present();
+
+                    while let Some(gilrs::Event { event, .. }) = self.controllers.next_event() {
+                        use gilrs::EventType::*;
+                        match event {
+                            Connected => {},
+                            Disconnected => {},
+                            ButtonPressed(button, _) => if let Some(button) = map_button(button) {
+                                self.console.press_button(Port::One, button, true);
+                            },
+                            ButtonReleased(button, _) => if let Some(button) = map_button(button) {
+                                self.console.press_button(Port::One, button, false);
+                            },
+                            AxisChanged(axis, value, _) => if let Some(stick) = map_stick(axis) {
+                                self.console.update_stick_axis(Port::One, stick, value);
+                            },
+                            _ => {}
+                        }
+                    }
                 }
                 self.window.as_ref().unwrap().window.request_redraw();
             },
@@ -448,4 +471,38 @@ fn pick_output_config(device: &cpal::Device) -> cpal::SupportedStreamConfigRange
         .expect("error while querying formats")
         .next()
         .expect("No supported config")
+}
+
+fn map_button(input: gilrs::Button) -> Option<Button> {
+    use gilrs::Button::*;
+    match input {
+        South           => Some(Button::Cross),
+        East            => Some(Button::Circle),
+        West            => Some(Button::Square),
+        North           => Some(Button::Triangle),
+        DPadUp          => Some(Button::DUp),
+        DPadRight       => Some(Button::DRight),
+        DPadLeft        => Some(Button::DLeft),
+        DPadDown        => Some(Button::DDown),
+        Select          => Some(Button::Select),
+        Start           => Some(Button::Start),
+        LeftTrigger     => Some(Button::L1),
+        LeftTrigger2    => Some(Button::L2),
+        RightTrigger    => Some(Button::R1),
+        RightTrigger2   => Some(Button::R2),
+        LeftThumb       => Some(Button::L3),
+        RightThumb      => Some(Button::R3),
+        _ => None,
+    }
+}
+
+fn map_stick(input: gilrs::Axis) -> Option<AnalogStickAxis> {
+    use gilrs::Axis::*;
+    match input {
+        LeftStickX  => Some(AnalogStickAxis::LeftX),
+        LeftStickY  => Some(AnalogStickAxis::LeftY),
+        RightStickX => Some(AnalogStickAxis::RightX),
+        RightStickY => Some(AnalogStickAxis::RightY),
+        _ => None,
+    }
 }

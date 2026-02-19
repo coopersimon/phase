@@ -124,6 +124,17 @@ impl PlayStation {
         controller.press_button(button, pressed);
     }
 
+    /// Update value for stick and axis. Only relevant for analog controllers.
+    /// The value should be between -1 and +1, with 0 the at-rest value.
+    pub fn update_stick_axis(&mut self, port: Port, stick: AnalogStickAxis, value: f32) {
+        // TODO: more gracefully handle errors?
+        let controller = match port {
+            Port::One => self.port_1_controller.as_mut().expect("port 1 controller is missing!"),
+            Port::Two => self.port_2_controller.as_mut().expect("port 2 controller is missing!"),
+        };
+        controller.update_stick_axis(stick, value);
+    }
+
     pub fn insert_cd(&mut self, path: PathBuf) {
         self.input.push(io::InputMessage::CDInserted { path });
     }
@@ -182,13 +193,21 @@ impl AudioHandler {
 #[derive(Clone, Copy, Debug)]
 pub enum ControllerType {
     Digital,
-    // TODO: analog
+    Analog,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Port {
     One,
     Two,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnalogStickAxis {
+    LeftX,
+    LeftY,
+    RightX,
+    RightY,
 }
 
 #[derive(Clone, Copy)]
