@@ -58,6 +58,7 @@ pub struct CDROM {
     playing: bool,
     read_data_counter: usize,
     current_sector_header: SectorHeader,
+    mute: bool,
 
     counter: usize,
     command: u8,
@@ -90,6 +91,7 @@ impl CDROM {
             playing: false,
             read_data_counter: 0,
             current_sector_header: SectorHeader::default(),
+            mute: false,
 
             counter: 0,
             command: 0,
@@ -499,9 +501,11 @@ impl CDROM {
                     return true;
                 }
             }
-            if let Some(disc) = self.disc.as_ref() {
-                let buffer = disc.ref_sector_data(SECTOR_HEADER, 0x900);
-                self.xa_audio.write_xa_adpcm_sector(buffer, self.current_sector_header.coding);
+            if !self.mute {
+                if let Some(disc) = self.disc.as_ref() {
+                    let buffer = disc.ref_sector_data(SECTOR_HEADER, 0x900);
+                    self.xa_audio.write_xa_adpcm_sector(buffer, self.current_sector_header.coding);
+                }
             }
             true
         } else {
@@ -513,9 +517,11 @@ impl CDROM {
     fn send_da_sector(&mut self) -> bool {
         // TODO: check if current track == audio?
         if self.playing && self.mode.contains(DriveMode::CDDA) {
-            if let Some(disc) = self.disc.as_ref() {
-                let buffer = disc.ref_sector_data(0, 0x930);
-                self.xa_audio.write_cd_audio_sector(buffer);
+            if !self.mute {
+                if let Some(disc) = self.disc.as_ref() {
+                    let buffer = disc.ref_sector_data(0, 0x930);
+                    self.xa_audio.write_cd_audio_sector(buffer);
+                }
             }
             true
         } else {
@@ -1107,12 +1113,13 @@ impl CDROM {
     }
 
     fn mute(&mut self) -> DriveResult<()> {
+        self.mute = true;
         self.send_response(&[self.drive_status.bits()], 3);
         self.command_complete()
     }
 
     fn demute(&mut self) -> DriveResult<()> {
-        // TODO: start audio streaming..?
+        self.mute = false;
         self.send_response(&[self.drive_status.bits()], 3);
         self.command_complete()
     }

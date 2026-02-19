@@ -19,7 +19,7 @@ pub struct XAAudio {
     channel_filter: u8,
     sound_map_info: CodingInfo,
 
-    mute: bool,
+    mute_adpcm: bool,
 
     sample_buffer: Vec<Stereo<i16>>,
     conv_sample_buffer: Vec<Stereo<i16>>,
@@ -38,7 +38,7 @@ impl XAAudio {
             channel_filter: 0,
             sound_map_info: CodingInfo::empty(),
 
-            mute: false,
+            mute_adpcm: false,
 
             sample_buffer:      Vec::new(),
             conv_sample_buffer: Vec::new(),
@@ -67,6 +67,9 @@ impl XAAudio {
     /// When encountering a new audio sector, this method
     /// decodes the ADPCM data.
     pub fn write_xa_adpcm_sector(&mut self, buffer: &[u8], coding_info: CodingInfo) {
+        if self.mute_adpcm {
+            return;
+        }
         let stereo = coding_info.contains(CodingInfo::Stereo);
         if coding_info.contains(CodingInfo::BitsPerSample) {
             self.decode_8bit_samples(buffer, stereo);
@@ -108,7 +111,7 @@ impl XAAudio {
 // CD register setters.
 impl XAAudio {
     pub fn apply_changes(&mut self, data: u8) {
-        self.mute = test_bit!(data, 0);
+        self.mute_adpcm = test_bit!(data, 0);
         if test_bit!(data, 5) {
             self.current_vol = self.staging_vol.clone();
         }
