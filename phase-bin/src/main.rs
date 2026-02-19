@@ -506,14 +506,3 @@ fn map_button(input: gilrs::Button) -> Option<Button> {
         _ => None,
     }
 }
-
-fn map_stick(input: gilrs::Axis) -> Option<AnalogStickAxis> {
-    use gilrs::Axis::*;
-    match input {
-        LeftStickX  => Some(AnalogStickAxis::LeftX),
-        LeftStickY  => Some(AnalogStickAxis::LeftY),
-        RightStickX => Some(AnalogStickAxis::RightX),
-        RightStickY => Some(AnalogStickAxis::RightY),
-        _ => None,
-    }
-}
