@@ -7,7 +7,7 @@ This is a PlayStation emulator. It is in development. It does software rendering
 Below is a list of selected games and their status.
 
 - Ape Escape: Mostly OK, some missing polys, sound is a bit off
-- Boku no Natsuyasumi: Doesn't boot
+- Boku no Natsuyasumi: Mostly OK
 - Castlevania: Symphony of the Night: Titles ok, in-game UI is black, characters appear incorrectly lit
 - Chrono Cross: Mostly OK, some flickering, title screen has some issues
 - Chrono Trigger: Mostly OK
@@ -17,6 +17,7 @@ Below is a list of selected games and their status.
 - Crash Team Racing: Mostly OK, some seams and occasional flickering (depth issue?) also image is not centred, large black bar at bottom.
 - Diablo: Mostly OK
 - Dino Crisis: Shows first screen then locks up
+- Dino Crisis 2: Shows initial titles, then plays some audio without video and then locks up
 - Dragon Warrior 7: Mostly ok, some flickering and audio popping
 - Final Fantasy 7: Mostly ok, some flickering
 - Final Fantasy 8: Intro is OK, some sound issues (vibrato?), opening cutscene is stuttery and has glitchy sound, gameplay is OK but sound issues
@@ -26,12 +27,16 @@ Below is a list of selected games and their status.
 - Grand Theft Auto 2: Mostly OK
 - Gran Turismo: Mostly OK
 - Gran Turismo 2: Tries to load from 1F801130 (just beyond the timers)
+- Legend of Dragoon: Mostly OK (?)
 - Medal of Honor: Mostly OK
 - Metal Gear Solid: Mostly OK, some flickering
+- Metal Slug X: Shows some opening screens then locks up.
 - PaRappa the Rapper: Mostly OK, some audio is a bit quiet
+- Parasite Eve: Mostly OK (?)
 - Resident Evil: Mostly OK
 - Resident Evil 2: Mostly OK
 - Silent Hill: Uses multitap memcard then locks up
+- Sim City 2000: Does strange stuff with MDEC, does not boot.
 - Spiderman: Mostly OK
 - Spyro the Dragon: Mostly OK
 - Suikoden: Mostly ok, flickering at top of screen.
@@ -49,7 +54,6 @@ Below is a list of selected games and their status.
 
 ### Core
 
-- Analog controllers
 - Graphics fixes:
   - Texture mapping
   - Interpolation

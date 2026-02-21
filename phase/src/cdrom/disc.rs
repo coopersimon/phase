@@ -217,6 +217,10 @@ impl Disc {
     /// Calculate the track based on the drive location.
     /// Also returns the relative position in the track.
     pub fn calculate_track(&self, pos: &DriveLoc) -> (u8, DriveLoc) {
+        if pos.minute == 0 && pos.second < 2 {
+            // Ugly hack...
+            return (1, *pos);
+        }
         // Assuming tracks are in chronological order...
         for track in self.tracks.iter().rev() {
             if let Some(pos) = pos.relative_to(&track.start_pos) {

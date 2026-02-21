@@ -31,6 +31,27 @@ const READ_CYCLES: usize = 451584;
 /// Varies in reality, just an arbitrary amount here.
 const SEEK_CYCLES: usize = 300000;
 
+#[derive(Clone)]
+struct CommandResponse {
+    irq: IntFlags,
+    response_len: u8,
+    data: [u8; 16],
+}
+
+impl CommandResponse {
+    fn new(int: u8, data: &[u8]) -> Self {
+        let mut buffer = [0; 16];
+        for (i, byte) in data.iter().cloned().enumerate() {
+            buffer[i] = byte;
+        }
+        Self {
+            irq: IntFlags::from_bits_retain(int),
+            response_len: data.len() as u8,
+            data: buffer,
+        }
+    }
+}
+
 /// CD-ROM reader.
 pub struct CDROM {
     disc: Option<Disc>,
@@ -59,13 +80,15 @@ pub struct CDROM {
     read_data_counter: usize,
     current_sector_header: SectorHeader,
     mute: bool,
+    /// Copy-protection.
+    sce_string: [u8; 4],
 
     counter: usize,
     command: u8,
     response_count: u8,
     data_fifo_size: u64,
     irq_latch: bool,
-    pending_irq_fifo: VecDeque<IntFlags>,
+    pending_res_fifo: VecDeque<CommandResponse>,
 }
 
 impl CDROM {
@@ -92,13 +115,14 @@ impl CDROM {
             read_data_counter: 0,
             current_sector_header: SectorHeader::default(),
             mute: false,
+            sce_string: [0, 0, 0, 0],
 
             counter: 0,
             command: 0,
             response_count: 0,
             data_fifo_size: 0,
             irq_latch: false,
-            pending_irq_fifo: VecDeque::new(),
+            pending_res_fifo: VecDeque::new(),
         }
     }
 
@@ -108,6 +132,8 @@ impl CDROM {
         if let Some(path) = path {
             let disc = Disc::new(path)?;
             self.disc = Some(disc);
+            self.read_region_string();
+            self.current_loc = DriveLoc { minute: 0, second: 0, sector: 0 };
         } else {
             self.disc = None
         }
@@ -371,11 +397,15 @@ impl CDROM {
         self.int_flags.remove(data_in);
         self.int_flags.insert(IntFlags::Unused);
         self.irq_latch = false;
-        if let Some(int) = self.pending_irq_fifo.pop_front() {
+        if let Some(res) = self.pending_res_fifo.pop_front() {
             self.int_flags.remove(IntFlags::Response);
-            self.int_flags.insert(int);
+            self.int_flags.insert(res.irq);
             if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
                 self.irq_latch = true;
+            }
+            self.response_fifo.clear();
+            for i in 0..(res.response_len as usize) {
+                self.response_fifo.push_back(res.data[i]);
             }
         }
     }
@@ -392,19 +422,20 @@ impl CDROM {
     /// 
     /// Also sets interrupt bits. Int should be a value 1-7.
     fn send_response(&mut self, data: &[u8], int: u8) {
-        // TODO: should we send response data immediately?
-        for byte in data {
-            self.response_fifo.push_back(*byte);
-        }
         self.status.insert(Status::ResFifoNotEmpty);
         let int_flag = IntFlags::from_bits_truncate(int);
         if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
-            self.pending_irq_fifo.push_back(int_flag);
+            let queued_res = CommandResponse::new(int, data);
+            self.pending_res_fifo.push_back(queued_res);
         } else {
             self.int_flags.remove(IntFlags::Response);
             self.int_flags.insert(int_flag);
             if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
                 self.irq_latch = true;
+            }
+            self.response_fifo.clear();
+            for byte in data {
+                self.response_fifo.push_back(*byte);
             }
         }
     }
@@ -445,6 +476,15 @@ impl CDROM {
 
     fn get_read_cycles(&self) -> usize {
         if self.mode.contains(DriveMode::Speed) {READ_CYCLES / 2} else {READ_CYCLES}
+    }
+
+    fn read_region_string(&mut self) {
+        if self.current_loc.minute == 0 && self.current_loc.second < 2 {
+            let region = 0x41; // 41,45,49
+            self.sce_string = [0x53, 0x43, 0x45, region];
+        } else {
+            self.sce_string = [0, 0, 0, 0];
+        }
     }
 
     /// Read a sector.
@@ -506,13 +546,13 @@ impl CDROM {
             if !self.current_sector_header.submode.contains(CDSectorSubmode::Audio | CDSectorSubmode::RealTime) {
                 return false;
             }
-            self.status.insert(Status::ADPBusy);
             if self.mode.contains(DriveMode::XAFilter) {
                 if !self.xa_audio.test_filter(self.current_sector_header.file, self.current_sector_header.channel) {
                     // Skip this sector.
                     return true;
                 }
             }
+            self.status.insert(Status::ADPBusy);
             if !self.mute {
                 if let Some(disc) = self.disc.as_ref() {
                     let buffer = disc.ref_sector_data(SECTOR_HEADER, 0x900);
@@ -576,8 +616,8 @@ impl CDROM {
         };
         if let Err(res) = res {
             self.send_response(&[self.drive_status.bits(), res.bits()], 5);
-            self.status.remove(Status::Busy);
             self.drive_status.remove(DriveStatus::Error);
+            let _ = self.command_complete();
         }
     }
 }
@@ -1018,12 +1058,19 @@ impl CDROM {
             0x01
         };
         println!("get loc p | track {} | pos {:02}:{:02}:{:02} | glob {:02}:{:02}:{:02}", current_track, track_pos.minute, track_pos.second, track_pos.sector, self.current_loc.minute, self.current_loc.second, self.current_loc.sector);
+        // TODO: handle this slightly better
+        let pos = if current_track == 1 {
+            // Binary track: ignore 2s pre-gap.
+            self.current_loc
+        } else {
+            track_pos
+        };
         self.send_response(&[
             to_bcd(current_track).unwrap(),
             to_bcd(index).unwrap(),
-            to_bcd(track_pos.minute).unwrap(),
-            to_bcd(track_pos.second).unwrap(),
-            to_bcd(track_pos.sector).unwrap(),
+            to_bcd(pos.minute).unwrap(),
+            to_bcd(pos.second).unwrap(),
+            to_bcd(pos.sector).unwrap(),
             to_bcd(self.current_loc.minute).unwrap(),
             to_bcd(self.current_loc.second).unwrap(),
             to_bcd(self.current_loc.sector).unwrap()
@@ -1036,7 +1083,6 @@ impl CDROM {
         let track_count = self.disc.as_ref().map(|d| d.get_track_count()).unwrap_or(1);
         let first_track = to_bcd(1).unwrap();
         let last_track = to_bcd(track_count).unwrap();
-        println!("get TN {:X} => {:X}", first_track, last_track);
         self.send_response(&[
             self.drive_status.bits(),
             first_track,
@@ -1048,10 +1094,9 @@ impl CDROM {
     /// Get track start
     fn get_td(&mut self) -> DriveResult<()> {
         let track = from_bcd(self.read_parameter()?).ok_or(DriveError::InvalidParam)?;
-        println!("get TD {:X}", track);
         let disc = self.disc.as_ref().ok_or(DriveError::InvalidCmd)?;
         let track_count = disc.get_track_count();
-        if track == 0 || track > track_count { // End of last track.
+        if track == 0 { // End of last track.
             let end_pos = disc.get_track_end_pos(track_count);
             self.send_response(&[
                 self.drive_status.bits(),
@@ -1091,10 +1136,10 @@ impl CDROM {
                         0x20, // Mode 2
                         0x00,
                         // Region String:
-                        0x53, // S
-                        0x43, // C
-                        0x45, // E
-                        0x41, // [Region: A/E/I] TODO: set based on disc. (41, 45, 49)
+                        self.sce_string[0], // S
+                        self.sce_string[1], // C
+                        self.sce_string[2], // E
+                        self.sce_string[3], // [Region: A/E/I]
                     ], 2);
                 } else {
                     self.send_response(&[
@@ -1117,6 +1162,16 @@ impl CDROM {
     fn subfunction(&mut self) -> DriveResult<()> {
         let op = self.read_parameter()?;
         match op {
+            0x04 => { // Read SCEx string
+                self.read_region_string();
+                self.send_response(&[self.drive_status.bits()], 3);
+                self.command_complete()
+            },
+            0x05 => { // Get SCEx counter
+                let counter = if self.sce_string[0] != 0 {1} else {0};
+                self.send_response(&[counter, counter], 3);
+                self.command_complete()
+            },
             0x20 => { // CDROM BIOS
                 self.send_response(&[
                     0x95, // yy
