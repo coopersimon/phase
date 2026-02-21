@@ -129,6 +129,11 @@ impl MemBus {
     /// DMA transfers are complete.
     fn do_dma(&mut self) {
         while let Some(transfer) = self.dma.get_transfer() {
+            while let Some(wait_cycles) = self.mut_dma_device(transfer.device).wait_cycles() {
+                if self.do_clock(wait_cycles) {
+                    self.begin_frame();
+                }
+            }
             let ram_addr = transfer.addr & 0x1F_FFFF;
             let cycles = if transfer.from_ram {
                 let data = self.main_ram.read_word(ram_addr);

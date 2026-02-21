@@ -15,6 +15,12 @@ pub trait DMADevice {
     /// 
     /// Returns a cycle count.
     fn dma_write_word(&mut self, data: u32) -> usize;
+
+    /// See if a wait is required before transferring more.
+    /// Returns the number of cycles to wait.
+    fn wait_cycles(&mut self) -> Option<usize> {
+        None
+    }
 }
 
 /// Direct memory access.
@@ -482,7 +488,7 @@ impl DMAChannel {
         if mode == DMA_LIST_MODE && self.next_list_addr.is_none() {
             return false;
         }
-        self.current_word_count = self.current_word_count.wrapping_sub(1);
+        self.current_word_count = self.current_word_count.wrapping_sub(1) & 0xFFFF;
         self.current_word_count == 0
     }
 

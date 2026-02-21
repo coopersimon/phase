@@ -6,7 +6,7 @@ This is a PlayStation emulator. It is in development. It does software rendering
 
 Below is a list of selected games and their status.
 
-- Ape Escape: Requires dualshock
+- Ape Escape: Mostly OK, some missing polys, sound is a bit off
 - Boku no Natsuyasumi: Doesn't boot
 - Castlevania: Symphony of the Night: Titles ok, in-game UI is black, characters appear incorrectly lit
 - Chrono Cross: Mostly OK, some flickering, title screen has some issues
@@ -19,7 +19,7 @@ Below is a list of selected games and their status.
 - Dino Crisis: Shows first screen then locks up
 - Dragon Warrior 7: Mostly ok, some flickering and audio popping
 - Final Fantasy 7: Mostly ok, some flickering
-- Final Fantasy 8: Intro is OK, some sound issues (vibrato?), opening cutscene is stuttery and has glitchy sound
+- Final Fantasy 8: Intro is OK, some sound issues (vibrato?), opening cutscene is stuttery and has glitchy sound, gameplay is OK but sound issues
 - Final Fantasy 9: Broken cutscenes
 - Final Fantasy Tactics: Mostly OK
 - Front Mission 3: Mostly OK

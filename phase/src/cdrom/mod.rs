@@ -249,6 +249,14 @@ impl DMADevice for CDROM {
     fn dma_write_word(&mut self, _data: u32) -> usize {
         panic!("not valid to use DMA to write to CDROM!")
     }
+
+    fn wait_cycles(&mut self) -> Option<usize> {
+        if self.data_fifo_size == 0 {
+            Some(24)
+        } else {
+            None
+        }
+    }
 }
 
 bitflags::bitflags! {
@@ -423,11 +431,15 @@ impl CDROM {
     }
 
     fn read_data(&mut self) -> u8 {
-        let data = self.disc.as_mut().map(|d| d.read_byte()).unwrap_or_default();
-        self.data_fifo_size -= 1;
-        if self.data_fifo_size == 0 {
-            self.status.remove(Status::DataFifoNotEmpty);
-        }
+        let data = if self.data_fifo_size > 0 {
+            self.data_fifo_size -= 1;
+            if self.data_fifo_size == 0 {
+                self.status.remove(Status::DataFifoNotEmpty);
+            }
+            self.disc.as_mut().map(|d| d.read_byte()).unwrap_or_default()
+        } else {
+            0x00
+        };
         data
     }
 
@@ -892,10 +904,16 @@ impl CDROM {
         self.drive_status.remove(DriveStatus::ReadBits);
         self.playing = false;
         if let Some(loc) = self.pending_seek.take() {
-            self.current_loc = loc;
-            self.seeking = true;
-            self.drive_status.insert(DriveStatus::Seeking);
-            self.read_data_counter = SEEK_CYCLES;
+            if self.current_loc != loc {
+                self.current_loc = loc;
+                self.seeking = true;
+                self.drive_status.insert(DriveStatus::Seeking);
+                self.read_data_counter = SEEK_CYCLES;
+            } else {
+                self.seeking = false;
+                self.drive_status.insert(DriveStatus::Reading);
+                self.read_data_counter = self.get_read_cycles();
+            }
         } else {
             self.seeking = false;
             self.drive_status.insert(DriveStatus::Reading);
