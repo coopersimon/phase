@@ -9,6 +9,7 @@ mod spu;
 mod gpu;
 mod peripheral;
 mod mdec;
+mod serial;
 mod utils;
 mod io;
 mod audio;
@@ -20,10 +21,11 @@ pub use crate::cpu::PSDebugger as PSDebugger;
 use crate::peripheral::controller::ControllerState;
 use crate::audio::{Resampler, SamplePacket, REAL_BASE_SAMPLE_RATE};
 
-type AudioChannel = Receiver<SamplePacket>;//(, Receiver<f64>);
+type AudioChannel = Receiver<SamplePacket>;
 
 /// Config for PlayStation.
 pub struct PlayStationConfig {
+    /// Path to the bios file to use.
     pub bios_path:  PathBuf,
 }
 
@@ -115,6 +117,7 @@ impl PlayStation {
         }
     }
 
+    /// Press a button on the controller plugged into a port.
     pub fn press_button(&mut self, port: Port, button: Button, pressed: bool) {
         // TODO: more gracefully handle errors?
         let controller = match port {
@@ -138,18 +141,26 @@ impl PlayStation {
         controller.update_stick_axis(stick, value);
     }
 
+    /// Insert a CD. The path must point to:
+    /// 1. A .cue file.
+    /// 2. A .bin file containing a solo binary track (only works for single-track games)
+    /// 3. A folder containing a .cue file, and .bin files.
     pub fn insert_cd(&mut self, path: PathBuf) {
         self.input.push(io::InputMessage::CDInserted { path });
     }
 
+    /// Remove the currently inserted CD.
     pub fn remove_cd(&mut self) {
         self.input.push(io::InputMessage::CDRemoved);
     }
 
+    /// Insert a memory card into a port.
+    /// If the path points to a file that does not exist, it will be created.
     pub fn insert_mem_card(&mut self, path: PathBuf, port: Port) {
         self.input.push(io::InputMessage::MemCardInserted { port, path });
     }
 
+    /// Remove a previously inserted memory card from a port.
     pub fn remove_mem_card(&mut self, port: Port) {
         self.input.push(io::InputMessage::MemCardRemoved { port });
     }
@@ -194,18 +205,23 @@ impl AudioHandler {
 }
 
 #[derive(Clone, Copy, Debug)]
+/// The type of controller being connected.
+/// Certain (typically older) games do not support Analog controllers,
+/// while certain newer games do not support Digital controllers.
 pub enum ControllerType {
     Digital,
     Analog,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The port of controller or memory card.
 pub enum Port {
     One,
     Two,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Controller analog stick side and axis.
 pub enum AnalogStickAxis {
     LeftX,
     LeftY,
@@ -214,6 +230,7 @@ pub enum AnalogStickAxis {
 }
 
 #[derive(Clone, Copy)]
+/// Controller buttons.
 pub enum Button {
     Select,
     /// Only available on analog controllers

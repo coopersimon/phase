@@ -11,6 +11,7 @@ use control::MemControl;
 use dma::DMA;
 pub use dma::DMADevice;
 
+use crate::serial::SerialIO;
 use crate::{AudioChannel, PlayStationConfig};
 use crate::gpu::GPU;
 use crate::io::{BusIO, InputMessage};
@@ -30,13 +31,14 @@ pub struct MemBus {
     bios: BIOS,
     interrupts: InterruptControl,
 
-    timers: Timers,
-    dma:    DMA,
-    cdrom:  CDROM,
-    spu:    SPU,
-    gpu:    GPU,
+    timers:     Timers,
+    dma:        DMA,
+    cdrom:      CDROM,
+    spu:        SPU,
+    gpu:        GPU,
     peripheral: PeripheralPort,
-    mdec:   MDEC,
+    mdec:       MDEC,
+    serial_io:  SerialIO,
 
     expansion_port_1: ExpansionPort1,
     expansion_port_2: ExpansionPort2,
@@ -54,13 +56,14 @@ impl MemBus {
             bios,
             interrupts: InterruptControl::new(),
 
-            timers: Timers::new(),
-            dma:    DMA::new(),
-            cdrom:  CDROM::new(),
-            spu:    SPU::new(),
-            gpu:    GPU::new(io.clone_frame_arc()),
+            timers:     Timers::new(),
+            dma:        DMA::new(),
+            cdrom:      CDROM::new(),
+            spu:        SPU::new(),
+            gpu:        GPU::new(io.clone_frame_arc()),
             peripheral: PeripheralPort::new(),
-            mdec:   MDEC::new(),
+            mdec:       MDEC::new(),
+            serial_io:  SerialIO::new(),
 
             expansion_port_1: ExpansionPort1::new(),
             expansion_port_2: ExpansionPort2::new(),
@@ -298,7 +301,7 @@ impl MemBus {
         match addr {
             0x1F80_1000..=0x1F80_1023 => &mut self.control,
             0x1F80_1040..=0x1F80_104F => &mut self.peripheral,
-            //0x1F80_1050..=0x1F80_105F => None, // Serial
+            0x1F80_1050..=0x1F80_105F => &mut self.serial_io,
             0x1F80_1060..=0x1F80_1063 => &mut self.control,
             0x1F80_1070..=0x1F80_1077 => &mut self.interrupts,
             0x1F80_1080..=0x1F80_10FF => &mut self.dma,

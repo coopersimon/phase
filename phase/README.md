@@ -19,7 +19,7 @@ Below is a list of selected games and their status.
 - Dino Crisis: Shows first screen then locks up
 - Dino Crisis 2: Shows initial titles, then plays some audio without video and then locks up
 - Dragon Warrior 7: Mostly ok, some flickering and audio popping
-- Final Fantasy 7: Mostly ok, some flickering
+- Final Fantasy 7: Mostly ok, some flickering, intro titles have slightly off sound (high-freq issue?)
 - Final Fantasy 8: Intro is OK, some sound issues (vibrato?), opening cutscene is stuttery and has glitchy sound, gameplay is OK but sound issues
 - Final Fantasy 9: Broken cutscenes
 - Final Fantasy Tactics: Mostly OK
@@ -35,6 +35,7 @@ Below is a list of selected games and their status.
 - Parasite Eve: Mostly OK (?)
 - Resident Evil: Mostly OK
 - Resident Evil 2: Mostly OK
+- Resident Evil 3: Intro cutscene loses sound, VRAM write crash when gameplay begins
 - Silent Hill: Uses multitap memcard then locks up
 - Sim City 2000: Does strange stuff with MDEC, does not boot.
 - Spiderman: Mostly OK
@@ -48,7 +49,7 @@ Below is a list of selected games and their status.
 - Twisted Metal: Mostly OK: gameplay looks a little weird maybe, eventually uses GP0 command 0x08BD0040 (???)
 - Vagrant Story: Mostly ok - looks like outline of map in bottom right of gameplay blends with itself
 - Wild ARMS: Mostly ok!
-- WipEout: Opening titles OK, tries to access serial port
+- WipEout: Visuals and gameplay OK, sound is broken (CD audio?)
 
 ## TODO list
 
