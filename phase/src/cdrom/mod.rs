@@ -87,6 +87,7 @@ pub struct CDROM {
     command: u8,
     response_count: u8,
     data_fifo_size: u64,
+    pending_irq: bool,
     irq_latch: bool,
     pending_res_fifo: VecDeque<CommandResponse>,
 }
@@ -121,6 +122,7 @@ impl CDROM {
             command: 0,
             response_count: 0,
             data_fifo_size: 0,
+            pending_irq: false,
             irq_latch: false,
             pending_res_fifo: VecDeque::new(),
         }
@@ -333,7 +335,7 @@ bitflags::bitflags! {
 // Internal.
 impl CDROM {
     fn check_irq(&mut self) -> bool {
-        std::mem::take(&mut self.irq_latch)
+        std::mem::take(&mut self.pending_irq)
     }
 
     fn write_status(&mut self, data: u8) {
@@ -382,8 +384,9 @@ impl CDROM {
     fn set_int_enable(&mut self, data: u8) {
         self.int_enable = IntFlags::from_bits_truncate(data);
         self.int_enable.insert(IntFlags::Unused);
-        if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
+        if !self.irq_latch && (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
             self.irq_latch = true;
+            self.pending_irq = true;
         }
     }
 
@@ -396,17 +399,20 @@ impl CDROM {
         }
         self.int_flags.remove(data_in);
         self.int_flags.insert(IntFlags::Unused);
-        self.irq_latch = false;
+        self.irq_latch = false; // ACK (TODO: only ACK if irq bits are cleared..?)
         if let Some(res) = self.pending_res_fifo.pop_front() {
             self.int_flags.remove(IntFlags::Response);
             self.int_flags.insert(res.irq);
             if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
                 self.irq_latch = true;
+                self.pending_irq = true;
             }
+            // TODO: clear on ACK instead of here?
             self.response_fifo.clear();
             for i in 0..(res.response_len as usize) {
                 self.response_fifo.push_back(res.data[i]);
             }
+            self.status.insert(Status::ResFifoNotEmpty);
         }
     }
     
@@ -422,9 +428,8 @@ impl CDROM {
     /// 
     /// Also sets interrupt bits. Int should be a value 1-7.
     fn send_response(&mut self, data: &[u8], int: u8) {
-        self.status.insert(Status::ResFifoNotEmpty);
         let int_flag = IntFlags::from_bits_truncate(int);
-        if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
+        if self.irq_latch {
             let queued_res = CommandResponse::new(int, data);
             self.pending_res_fifo.push_back(queued_res);
         } else {
@@ -432,11 +437,13 @@ impl CDROM {
             self.int_flags.insert(int_flag);
             if (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
                 self.irq_latch = true;
+                self.pending_irq = true;
             }
             self.response_fifo.clear();
             for byte in data {
                 self.response_fifo.push_back(*byte);
             }
+            self.status.insert(Status::ResFifoNotEmpty);
         }
     }
 
@@ -479,7 +486,7 @@ impl CDROM {
     }
 
     fn read_region_string(&mut self) {
-        if self.current_loc.minute == 0 && self.current_loc.second < 2 {
+        if self.current_loc.in_pre_gap() {
             let region = 0x41; // 41,45,49
             self.sce_string = [0x53, 0x43, 0x45, region];
         } else {
@@ -493,7 +500,7 @@ impl CDROM {
     /// and as such we need to trigger interrupt 1.
     fn read_sector(&mut self) -> bool {
         // Check if we need to load from disc.
-        println!("CD read @ {:02}:{:02}:{:02}", self.current_loc.minute, self.current_loc.second, self.current_loc.sector);
+        println!("CD read @ {}", self.current_loc);
         if let Some(disc) = self.disc.as_mut() {
             disc.load_from_file(&self.current_loc);
             self.current_sector_header = SectorHeader::from_slice(disc.ref_sector_data(SECTOR_SYNC_BYTES, 8));
@@ -524,7 +531,7 @@ impl CDROM {
         // Begin count down for the next read.
         self.read_data_counter = self.get_read_cycles();
         self.current_loc.next_sector();
-        if self.mode.contains(DriveMode::CDDA.intersection(DriveMode::AutoPause)) {
+        if self.mode.contains(DriveMode::CDDA.union(DriveMode::AutoPause)) {
             if let Some(disc) = self.disc.as_ref() {
                 if self.current_loc == disc.get_current_track_end_pos() {
                     self.drive_status.remove(DriveStatus::ReadBits);
@@ -583,7 +590,13 @@ impl CDROM {
 
     /// Execute the current command.
     fn exec_command(&mut self) {
-        // TODO: command interrupt!
+        if self.request.contains(Request::CommandStartInt) {
+            self.int_flags.insert(IntFlags::CommandStart);
+            if !self.irq_latch && (self.int_enable & self.int_flags).intersects(IntFlags::IntBits) {
+                self.irq_latch = true;
+                self.pending_irq = true;
+            }
+        }
         println!("cd command: {:X}", self.command);
         let res = match self.command {
             0x00 => self.sync(),
@@ -726,6 +739,17 @@ impl DriveLoc {
                 self.minute += 1;
             }
         }
+    }
+
+    /// Check if we are in index 00 (the pre-gap)
+    fn in_pre_gap(&self) -> bool {
+        self.minute == 0 && self.second < 2
+    }
+}
+
+impl std::fmt::Display for DriveLoc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02}:{:02}:{:02}", self.minute, self.second, self.sector)
     }
 }
 
@@ -886,10 +910,11 @@ impl CDROM {
             second: from_bcd(second).ok_or(DriveError::InvalidParam)?,
             sector: from_bcd(sector).ok_or(DriveError::InvalidParam)?
         };
-        println!("Seek to {:02}:{:02}:{:02}", seek_loc.minute, seek_loc.second, seek_loc.sector);
+        println!("Seek to {}", seek_loc);
         self.pending_seek = Some(seek_loc);
         self.drive_status.remove(DriveStatus::ReadBits);
         self.read_data_counter = 0;
+        self.playing = false;
         self.send_response(&[self.drive_status.bits()], 3);
         self.command_complete()
     }
@@ -1052,25 +1077,18 @@ impl CDROM {
         let disc = self.disc.as_ref().ok_or(DriveError::InvalidCmd)?;
         let (current_track, track_pos) = disc.calculate_track(&self.current_loc);
         // TODO: get actual index information.
-        let index = if track_pos.minute == 0 && track_pos.second < 2 {
-            0x00 // pre-gap
+        let index = if track_pos.in_pre_gap() {
+            0x00
         } else {
             0x01
         };
-        println!("get loc p | track {} | pos {:02}:{:02}:{:02} | glob {:02}:{:02}:{:02}", current_track, track_pos.minute, track_pos.second, track_pos.sector, self.current_loc.minute, self.current_loc.second, self.current_loc.sector);
-        // TODO: handle this slightly better
-        let pos = if current_track == 1 {
-            // Binary track: ignore 2s pre-gap.
-            self.current_loc
-        } else {
-            track_pos
-        };
+        println!("get loc p | track {} | pos {} | glob {}", current_track, track_pos, self.current_loc);
         self.send_response(&[
             to_bcd(current_track).unwrap(),
             to_bcd(index).unwrap(),
-            to_bcd(pos.minute).unwrap(),
-            to_bcd(pos.second).unwrap(),
-            to_bcd(pos.sector).unwrap(),
+            to_bcd(track_pos.minute).unwrap(),
+            to_bcd(track_pos.second).unwrap(),
+            to_bcd(track_pos.sector).unwrap(),
             to_bcd(self.current_loc.minute).unwrap(),
             to_bcd(self.current_loc.second).unwrap(),
             to_bcd(self.current_loc.sector).unwrap()
@@ -1106,7 +1124,7 @@ impl CDROM {
             self.command_complete()
         } else if track <= track_count {
             let start_pos = disc.get_track_start_pos(track);
-            println!("Track {} pos: {:02}:{:02}:{:02}", track, start_pos.minute, start_pos.second, start_pos.sector);
+            println!("Track {} pos: {}", track, start_pos);
             self.send_response(&[
                 self.drive_status.bits(),
                 to_bcd(start_pos.minute).unwrap(),

@@ -93,10 +93,10 @@ impl Disc {
         let disc_file = File::open(path)?;
         let start_pos = DriveLoc {
             minute: 0x00,
-            second: 0x02, // Binaries start at second 2.
+            second: 0x00,
             sector: 0x00,
         };
-        let end_pos = get_file_end_pos(&disc_file);
+        let end_pos = get_file_size(&disc_file).add(&DriveLoc { minute: 0, second: 2, sector: 0 });
         let track = Track {
             num: 0x01,
             file: disc_file,
@@ -124,11 +124,12 @@ impl Disc {
             second: 0x00,
             sector: 0x00,
         };
-        for track in cue_file.tracks {
+        for (i, track) in cue_file.tracks.iter().enumerate() {
             let path = folder_path.join(&track.file_name);
             let file = File::open(path)?;
-            let start_pos = current_pos.add(&DriveLoc { minute: 0, second: 2, sector: 0 }); // 2 second pre-gap.
-            let end_pos = start_pos.add(&get_file_end_pos(&file));
+            let start_pos = current_pos;
+            let file_size = get_file_size(&file);
+            let end_pos = start_pos.add(&DriveLoc { minute: 0, second: 2, sector: 0 }).add(&file_size);
             tracks.push(Track {
                 num: track.num as u8,
                 file,
@@ -137,6 +138,7 @@ impl Disc {
                 end_pos
             });
             current_pos = end_pos;
+            println!("Track {}: {} => {}", i + 1, start_pos, end_pos);
         }
         Ok(Self {
             tracks,
@@ -156,8 +158,14 @@ impl Disc {
     /// other nearby sectors.
     pub fn load_from_file(&mut self, seek_loc: &DriveLoc) {
         let (track, track_pos) = self.calculate_track(seek_loc);
-        let seek_offset = track_pos.byte_offset();
-        println!("Loading track {} | pos: {:02}:{:02}:{:02} | offset: {:X}", track, track_pos.minute, track_pos.second, track_pos.sector, seek_offset);
+        if track_pos.in_pre_gap() {
+            println!("Loading track {} | pos: {} | pre-gap", track, track_pos);
+            self.buffer.fill(0);
+            return;
+        }
+        const PRE_GAP_SIZE: u64 = SECTOR_SIZE * 75 * 2;
+        let seek_offset = track_pos.byte_offset() - PRE_GAP_SIZE;
+        println!("Loading track {} | pos: {} | offset: {:X}", track, track_pos, seek_offset);
         let chunk_num = seek_offset / DISC_BUFFER_SIZE;
         let target_file_offset = chunk_num * DISC_BUFFER_SIZE;
         if self.buffer_file_offset == target_file_offset && self.current_track == track {
@@ -202,7 +210,8 @@ impl Disc {
     /// This is taken from index 01 (i.e. after the pre-gap)
     pub fn get_track_start_pos(&self, track: u8) -> DriveLoc {
         let track_idx = (track - 1) as usize;
-        self.tracks[track_idx].start_pos
+        let index_1_pos = self.tracks[track_idx].start_pos.add(&DriveLoc { minute: 0, second: 2, sector: 0 });
+        DriveLoc { minute: index_1_pos.minute, second: index_1_pos.second, sector: 0 }
     }
 
     pub fn get_track_end_pos(&self, track: u8) -> DriveLoc {
@@ -217,10 +226,6 @@ impl Disc {
     /// Calculate the track based on the drive location.
     /// Also returns the relative position in the track.
     pub fn calculate_track(&self, pos: &DriveLoc) -> (u8, DriveLoc) {
-        if pos.minute == 0 && pos.second < 2 {
-            // Ugly hack...
-            return (1, *pos);
-        }
         // Assuming tracks are in chronological order...
         for track in self.tracks.iter().rev() {
             if let Some(pos) = pos.relative_to(&track.start_pos) {
@@ -232,12 +237,13 @@ impl Disc {
     }
 }
 
-fn get_file_end_pos(file: &File) -> DriveLoc {
+fn get_file_size(file: &File) -> DriveLoc {
     let metadata = file.metadata().expect("could not get file metadata");
     let file_len = metadata.len();
     let sector_count = file_len / SECTOR_SIZE;
-    let total_seconds = sector_count / 75; // Round down to nearest second.
+    let total_seconds = sector_count / 75;
     let minute = (total_seconds / 60) as u8;
     let second = (total_seconds % 60) as u8;
-    DriveLoc { minute, second, sector: 0 }
+    let sector = (sector_count % 75) as u8;
+    DriveLoc { minute, second, sector }
 }

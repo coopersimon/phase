@@ -43,13 +43,13 @@ Below is a list of selected games and their status.
 - Suikoden: Mostly ok, flickering at top of screen.
 - Suikoden 2: Mostly OK
 - Tekken 3: Mostly ok!
-- Tomb Raider: Mostly ok
+- Tomb Raider: Mostly ok, music in game selection screen does not play
 - Tony Hawk's Pro Skater: Mostly OK, sometimes locks up when loading level
 - Tony Hawk's Pro Skater 2: Very similar to THPS1
 - Twisted Metal: Mostly OK: gameplay looks a little weird maybe, eventually uses GP0 command 0x08BD0040 (???)
 - Vagrant Story: Mostly ok - looks like outline of map in bottom right of gameplay blends with itself
 - Wild ARMS: Mostly ok!
-- WipEout: Visuals and gameplay OK, sound is broken (CD audio?)
+- WipEout: Mostly OK!
 
 ## TODO list
 
