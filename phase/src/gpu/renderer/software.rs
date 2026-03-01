@@ -14,10 +14,10 @@ struct DrawingArea {
 }
 
 struct TextureWindow {
-    mask_s: u8,
-    mask_t: u8,
-    offset_s: u8,
-    offset_t: u8,
+    mask_u: u8,
+    mask_v: u8,
+    offset_u: u8,
+    offset_v: u8,
 }
 
 /// Software implementation of rendering functions
@@ -52,7 +52,7 @@ impl SoftwareRenderer {
             frame_pos: Coord { x: 0, y: 0 },
             drawing_area: DrawingArea { top: 0, bottom: 0, left: 0, right: 0 },
             draw_offset: Coord { x: 0, y: 0 },
-            tex_window: TextureWindow { mask_s: 0, mask_t: 0, offset_s: 0, offset_t: 0 },
+            tex_window: TextureWindow { mask_u: 0, mask_v: 0, offset_u: 0, offset_v: 0 },
             interlace: false,
             display_height: 240,
 
@@ -192,11 +192,11 @@ impl RendererImpl for SoftwareRenderer {
         self.dither = dither;
     }
 
-    fn set_texture_window(&mut self, mask_s: u8, mask_t: u8, offset_s: u8, offset_t: u8) {
-        self.tex_window.mask_s = mask_s;
-        self.tex_window.mask_t = mask_t;
-        self.tex_window.offset_s = offset_s;
-        self.tex_window.offset_t = offset_t;
+    fn set_texture_window(&mut self, mask_u: u8, mask_v: u8, offset_u: u8, offset_v: u8) {
+        self.tex_window.mask_u = mask_u;
+        self.tex_window.mask_v = mask_v;
+        self.tex_window.offset_u = offset_u;
+        self.tex_window.offset_v = offset_v;
     }
 
     fn set_draw_area_top_left(&mut self, left: i16, top: i16) {
@@ -313,17 +313,17 @@ impl RendererImpl for SoftwareRenderer {
         let x_min = left.max(self.drawing_area.left);
         let x_max = right.min(self.drawing_area.right);
         let start_coord = TexCoord {
-            s: if left < self.drawing_area.left {
+            u: if left < self.drawing_area.left {
                 let offset = self.drawing_area.left - left;
-                ((tex_coord.s as u16 as i16) + offset) as u8
+                ((tex_coord.u as u16 as i16) + offset) as u8
             } else {
-                tex_coord.s
+                tex_coord.u
             },
-            t: if top < self.drawing_area.top {
+            v: if top < self.drawing_area.top {
                 let offset = self.drawing_area.top - top;
-                ((tex_coord.t as u16 as i16) + offset) as u8
+                ((tex_coord.v as u16 as i16) + offset) as u8
             } else {
-                tex_coord.t
+                tex_coord.v
             },
         };
         let mut current_tex_coord = start_coord;
@@ -338,10 +338,10 @@ impl RendererImpl for SoftwareRenderer {
                     let trans_mode = if transparent {Some(tex_info.trans_mode)} else {None};
                     self.write_pixel(addr, &frag_color, trans_mode);
                 }
-                current_tex_coord.s += 1;
+                current_tex_coord.u += 1;
             }
-            current_tex_coord.t += 1;
-            current_tex_coord.s = start_coord.s;
+            current_tex_coord.v += 1;
+            current_tex_coord.u = start_coord.u;
         }
     }
 
@@ -552,32 +552,32 @@ impl SoftwareRenderer {
     }
 
     fn tex_lookup(&self, tex_coords: &TexCoord, tex_info: &TexInfo) -> u16 {
-        let tex_s = (tex_coords.s & !self.tex_window.mask_s) | (self.tex_window.mask_s & self.tex_window.offset_s);
-        let tex_t = (tex_coords.t & !self.tex_window.mask_t) | (self.tex_window.mask_t & self.tex_window.offset_t);
-        let t = tex_t as usize + tex_info.t_base;
+        let tex_u = (tex_coords.u & !self.tex_window.mask_u) | (self.tex_window.mask_u & self.tex_window.offset_u);
+        let tex_v = (tex_coords.v & !self.tex_window.mask_v) | (self.tex_window.mask_v & self.tex_window.offset_v);
+        let v = tex_v as usize + tex_info.v_base;
         match tex_info.tex_mode {
             TexMode::Palette4 => {
-                let s = (tex_s as usize / 4) + tex_info.s_base;
-                let tex_addr = t * 1024 + s;
+                let u = (tex_u as usize / 4) + tex_info.u_base;
+                let tex_addr = v * 1024 + u;
                 let data = self.vram[tex_addr];
-                let palette_shift = (tex_s & 0x3) * 4;
+                let palette_shift = (tex_u & 0x3) * 4;
                 let palette_idx = ((data >> palette_shift) & 0xF) as usize;
                 //println!("s: {:X} t: {:X} addr: {:X} idx: {:X}", line.tex_s, line.tex_t, tex_addr, palette_idx);
                 let palette_addr = tex_info.palette_coord.y * 1024 + tex_info.palette_coord.x + palette_idx;
                 self.vram[palette_addr]
             },
             TexMode::Palette8 => {
-                let s = (tex_s as usize / 2) + tex_info.s_base;
-                let tex_addr = t * 1024 + s;
+                let u = (tex_u as usize / 2) + tex_info.u_base;
+                let tex_addr = v * 1024 + u;
                 let data = self.vram[tex_addr];
-                let palette_shift = (tex_s & 0x1) * 8;
+                let palette_shift = (tex_u & 0x1) * 8;
                 let palette_idx = ((data >> palette_shift) & 0xFF) as usize;
                 let palette_addr = tex_info.palette_coord.y * 1024 + tex_info.palette_coord.x + palette_idx;
                 self.vram[palette_addr]
             },
             TexMode::Direct => {
-                let s = tex_s as usize + tex_info.s_base;
-                let tex_addr = t * 1024 + s;
+                let u = tex_u as usize + tex_info.u_base;
+                let tex_addr = v * 1024 + u;
                 self.vram[tex_addr]
             }
         }
@@ -624,8 +624,8 @@ struct Line {
     r: InterpolatedValue,
     g: InterpolatedValue,
     b: InterpolatedValue,
-    tex_s: InterpolatedValue,
-    tex_t: InterpolatedValue,
+    tex_u: InterpolatedValue,
+    tex_v: InterpolatedValue,
 }
 
 impl Line {
@@ -633,17 +633,17 @@ impl Line {
         let span_size = (bottom.coord.y - top.coord.y) as i32;
         let gradient = ((1 << 16) / span_size) + 1;
         let i = (line - top.coord.y) as i32;
-        let top_tex_s = if top.tex.s == 255 {256} else {top.tex.s as i32};
-        let top_tex_t = if top.tex.t == 255 {256} else {top.tex.t as i32};
-        let bottom_tex_s = if bottom.tex.s == 255 {256} else {bottom.tex.s as i32};
-        let bottom_tex_t = if bottom.tex.t == 255 {256} else {bottom.tex.t as i32};
+        let top_tex_u = if top.tex.u == 255 {256} else {top.tex.u as i32};
+        let top_tex_v = if top.tex.v == 255 {256} else {top.tex.v as i32};
+        let bottom_tex_u = if bottom.tex.u == 255 {256} else {bottom.tex.u as i32};
+        let bottom_tex_v = if bottom.tex.v == 255 {256} else {bottom.tex.v as i32};
         Self {
             x: InterpolatedValue::new(gradient, top.coord.x.into(), bottom.coord.x.into(), i),
             r: InterpolatedValue::new(gradient, top.col.r.into(), bottom.col.r.into(), i),
             g: InterpolatedValue::new(gradient, top.col.g.into(), bottom.col.g.into(), i),
             b: InterpolatedValue::new(gradient, top.col.b.into(), bottom.col.b.into(), i),
-            tex_s: InterpolatedValue::new(gradient, top_tex_s, bottom_tex_s, i),
-            tex_t: InterpolatedValue::new(gradient, top_tex_t, bottom_tex_t, i),
+            tex_u: InterpolatedValue::new(gradient, top_tex_u, bottom_tex_u, i),
+            tex_v: InterpolatedValue::new(gradient, top_tex_v, bottom_tex_v, i),
         }
     }
 
@@ -653,17 +653,17 @@ impl Line {
         let span_size = (right_x - left_x) as i32;
         let gradient = ((1 << 16) / span_size) + 1;
         let i = (x - left_x) as i32;
-        let left_tex_s = if (left.tex_s.val >> 16) == 255 {256} else {left.tex_s.val >> 16};
-        let left_tex_t = if (left.tex_t.val >> 16) == 255 {256} else {left.tex_t.val >> 16};
-        let right_tex_s = if (right.tex_s.val >> 16) == 255 {256} else {right.tex_s.val >> 16};
-        let right_tex_t = if (right.tex_t.val >> 16) == 255 {256} else {right.tex_t.val >> 16};
+        let left_tex_u = if (left.tex_u.val >> 16) == 255 {256} else {left.tex_u.val >> 16};
+        let left_tex_v = if (left.tex_v.val >> 16) == 255 {256} else {left.tex_v.val >> 16};
+        let right_tex_u = if (right.tex_u.val >> 16) == 255 {256} else {right.tex_u.val >> 16};
+        let right_tex_v = if (right.tex_v.val >> 16) == 255 {256} else {right.tex_v.val >> 16};
         Self {
             x: InterpolatedValue::default(),
             r: InterpolatedValue::new_shifted(gradient, left.r.val, right.r.val, i),
             g: InterpolatedValue::new_shifted(gradient, left.g.val, right.g.val, i),
             b: InterpolatedValue::new_shifted(gradient, left.b.val, right.b.val, i),
-            tex_s: InterpolatedValue::new(gradient, left_tex_s, right_tex_s, i),
-            tex_t: InterpolatedValue::new(gradient, left_tex_t, right_tex_t, i),
+            tex_u: InterpolatedValue::new(gradient, left_tex_u, right_tex_u, i),
+            tex_v: InterpolatedValue::new(gradient, left_tex_v, right_tex_v, i),
         }
     }
 
@@ -679,9 +679,9 @@ impl Line {
         }
     }
     fn get_tex_coords(&self) -> TexCoord {
-        let s = (self.tex_s.val >> 16).clamp(0, 0xFF) as u8;
-        let t = (self.tex_t.val >> 16).clamp(0, 0xFF) as u8;
-        TexCoord { s, t }
+        let u = (self.tex_u.val >> 16).clamp(0, 0xFF) as u8;
+        let v = (self.tex_v.val >> 16).clamp(0, 0xFF) as u8;
+        TexCoord { u, v }
     }
 
     /// Advance internal state.
@@ -690,8 +690,8 @@ impl Line {
         self.r.inc();
         self.g.inc();
         self.b.inc();
-        self.tex_s.inc();
-        self.tex_t.inc();
+        self.tex_u.inc();
+        self.tex_v.inc();
     }
 
     /// Inc i times.
@@ -700,8 +700,8 @@ impl Line {
         self.r.mul(i);
         self.g.mul(i);
         self.b.mul(i);
-        self.tex_s.mul(i);
-        self.tex_t.mul(i);
+        self.tex_u.mul(i);
+        self.tex_v.mul(i);
     }
 }
 

@@ -575,11 +575,11 @@ impl Renderer {
     }
 
     fn texture_window_setting(&mut self, param: u32) {
-        let mask_s = ((param & 0x1F) as u8) << 3;
-        let mask_t = (((param >> 5) & 0x1F) as u8) << 3;
-        let offset_s = (((param >> 10) & 0x1F) as u8) << 3;
-        let offset_t = (((param >> 15) & 0x1F) as u8) << 3;
-        self.renderer.set_texture_window(mask_s, mask_t, offset_s, offset_t);
+        let mask_u = ((param & 0x1F) as u8) << 3;
+        let mask_v = (((param >> 5) & 0x1F) as u8) << 3;
+        let offset_u = (((param >> 10) & 0x1F) as u8) << 3;
+        let offset_v = (((param >> 15) & 0x1F) as u8) << 3;
+        self.renderer.set_texture_window(mask_u, mask_v, offset_u, offset_v);
     }
 
     fn set_draw_area_top_left(&mut self, param: u32) {
@@ -624,7 +624,7 @@ trait RendererImpl {
     fn set_color_depth(&mut self, rgb24: bool);
 
     fn set_draw_mode(&mut self, trans_mode: TransparencyMode, dither: bool);
-    fn set_texture_window(&mut self, mask_s: u8, mask_t: u8, offset_s: u8, offset_t: u8);
+    fn set_texture_window(&mut self, mask_u: u8, mask_v: u8, offset_u: u8, offset_v: u8);
     fn set_draw_area_top_left(&mut self, left: i16, top: i16);
     fn set_draw_area_bottom_right(&mut self, right: i16, bottom: i16);
     fn set_draw_area_offset(&mut self, x: i16, y: i16);
@@ -782,16 +782,16 @@ impl Color {
 
 #[derive(Clone, Copy)]
 struct TexCoord {
-    s: u8,
-    t: u8,
+    u: u8,
+    v: u8,
 }
 
 impl TexCoord {
     #[inline(always)]
     fn from_16(coords: u16) -> Self {
         Self {
-            s: (coords & 0xFF) as u8,
-            t: ((coords >> 8) & 0xFF) as u8,
+            u: (coords & 0xFF) as u8,
+            v: ((coords >> 8) & 0xFF) as u8,
         }
     }
 }
@@ -809,7 +809,7 @@ impl Vertex {
         Self {
             coord: Coord::from_xy(xy).vertex_clip(),
             col: Color::default(),
-            tex: TexCoord { s: 0, t: 0 },
+            tex: TexCoord { u: 0, v: 0 },
         }
     }
 
@@ -842,8 +842,8 @@ impl PaletteCoord {
 }
 
 struct TexInfo {
-    s_base: usize,
-    t_base: usize,
+    u_base: usize,
+    v_base: usize,
     tex_mode: TexMode,
     trans_mode: TransparencyMode,
     palette_coord: PaletteCoord,
@@ -870,8 +870,8 @@ impl TexInfo {
             _ => unreachable!()
         };
         Self {
-            s_base: ((draw_mode & 0x0F) as usize) << 6,
-            t_base: ((draw_mode & 0x10) as usize) << 4,
+            u_base: ((draw_mode & 0x0F) as usize) << 6,
+            v_base: ((draw_mode & 0x10) as usize) << 4,
             tex_mode,
             trans_mode,
             palette_coord: palette,
