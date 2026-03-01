@@ -41,6 +41,9 @@ struct Args {
 
     #[arg(short, long)]
     analog: bool,
+
+    #[arg(long)]
+    crtmode: bool,
 }
 
 fn main() {
@@ -66,17 +69,17 @@ fn main() {
     if args.debug {
         debug::debug_mode(playstation.make_debugger());
     } else {
-        run(playstation, game_disc, args.mute);
+        run(playstation, game_disc, args.mute, args.crtmode);
     }
 }
 
 /// Run playstation with visuals.
-fn run(mut playstation: PlayStation, game_disc: Option<PathBuf>, mute: bool) {
+fn run(mut playstation: PlayStation, game_disc: Option<PathBuf>, mute: bool, crt_mode: bool) {
     let event_loop = EventLoop::new().expect("Failed to create event loop");
 
     let audio_stream = make_audio_stream(&mut playstation, mute);
 
-    let mut app = App::new(playstation, game_disc, audio_stream);
+    let mut app = App::new(playstation, game_disc, audio_stream, crt_mode);
 
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
     event_loop.run_app(&mut app).unwrap();
@@ -124,7 +127,7 @@ struct App {
 }
 
 impl App {
-    fn new(console: PlayStation, game_disc: Option<PathBuf>, audio_stream: cpal::Stream) -> Self {
+    fn new(console: PlayStation, game_disc: Option<PathBuf>, audio_stream: cpal::Stream, crt_mode: bool) -> Self {
         // Setup wgpu
         let instance = wgpu::Instance::new(&Default::default());
 
@@ -176,7 +179,11 @@ impl App {
             ..Default::default()
         });
 
-        let shader_module = device.create_shader_module(wgpu::include_wgsl!("./shaders/display.wgsl"));
+        let shader_module = if crt_mode {
+            device.create_shader_module(wgpu::include_wgsl!("./shaders/crt.wgsl"))
+        } else {
+            device.create_shader_module(wgpu::include_wgsl!("./shaders/display.wgsl"))
+        };
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
