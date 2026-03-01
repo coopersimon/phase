@@ -630,47 +630,57 @@ struct Line {
 
 impl Line {
     fn from_vertices(top: &Vertex, bottom: &Vertex, line: i16) -> Self {
-        let gradient = (1 << 16) / ((bottom.coord.y - top.coord.y) as i32);
+        let span_size = (bottom.coord.y - top.coord.y) as i32;
+        let gradient = ((1 << 16) / span_size) + 1;
         let i = (line - top.coord.y) as i32;
+        let top_tex_s = if top.tex.s == 255 {256} else {top.tex.s as i32};
+        let top_tex_t = if top.tex.t == 255 {256} else {top.tex.t as i32};
+        let bottom_tex_s = if bottom.tex.s == 255 {256} else {bottom.tex.s as i32};
+        let bottom_tex_t = if bottom.tex.t == 255 {256} else {bottom.tex.t as i32};
         Self {
             x: InterpolatedValue::new(gradient, top.coord.x.into(), bottom.coord.x.into(), i),
             r: InterpolatedValue::new(gradient, top.col.r.into(), bottom.col.r.into(), i),
             g: InterpolatedValue::new(gradient, top.col.g.into(), bottom.col.g.into(), i),
             b: InterpolatedValue::new(gradient, top.col.b.into(), bottom.col.b.into(), i),
-            tex_s: InterpolatedValue::new(gradient, top.tex.s.into(), bottom.tex.s.into(), i),
-            tex_t: InterpolatedValue::new(gradient, top.tex.t.into(), bottom.tex.t.into(), i),
+            tex_s: InterpolatedValue::new(gradient, top_tex_s, bottom_tex_s, i),
+            tex_t: InterpolatedValue::new(gradient, top_tex_t, bottom_tex_t, i),
         }
     }
 
     fn from_lines(left: &Line, right: &Line, x: i16) -> Self {
         let left_x = left.get_x();
         let right_x = right.get_x();
-        let gradient = (1 << 16) / ((right_x - left_x) as i32);
+        let span_size = (right_x - left_x) as i32;
+        let gradient = ((1 << 16) / span_size) + 1;
         let i = (x - left_x) as i32;
+        let left_tex_s = if (left.tex_s.val >> 16) == 255 {256} else {left.tex_s.val >> 16};
+        let left_tex_t = if (left.tex_t.val >> 16) == 255 {256} else {left.tex_t.val >> 16};
+        let right_tex_s = if (right.tex_s.val >> 16) == 255 {256} else {right.tex_s.val >> 16};
+        let right_tex_t = if (right.tex_t.val >> 16) == 255 {256} else {right.tex_t.val >> 16};
         Self {
             x: InterpolatedValue::default(),
             r: InterpolatedValue::new_shifted(gradient, left.r.val, right.r.val, i),
             g: InterpolatedValue::new_shifted(gradient, left.g.val, right.g.val, i),
             b: InterpolatedValue::new_shifted(gradient, left.b.val, right.b.val, i),
-            tex_s: InterpolatedValue::new_shifted(gradient, left.tex_s.val, right.tex_s.val, i),
-            tex_t: InterpolatedValue::new_shifted(gradient, left.tex_t.val, right.tex_t.val, i),
+            tex_s: InterpolatedValue::new(gradient, left_tex_s, right_tex_s, i),
+            tex_t: InterpolatedValue::new(gradient, left_tex_t, right_tex_t, i),
         }
     }
 
     fn get_x(&self) -> i16 {
-        ((self.x.val + 0x8000) >> 16) as i16
+        (self.x.val >> 16) as i16
     }
     fn get_color(&self) -> Color {
         Color {
-            r: ((self.r.val + 0x8000) >> 16).clamp(0, 0xFF) as u8,
-            g: ((self.g.val + 0x8000) >> 16).clamp(0, 0xFF) as u8,
-            b: ((self.b.val + 0x8000) >> 16).clamp(0, 0xFF) as u8,
+            r: (self.r.val >> 16).clamp(0, 0xFF) as u8,
+            g: (self.g.val >> 16).clamp(0, 0xFF) as u8,
+            b: (self.b.val >> 16).clamp(0, 0xFF) as u8,
             mask: 0,
         }
     }
     fn get_tex_coords(&self) -> TexCoord {
-        let s = ((self.tex_s.val + 0x8000) >> 16) as u8;
-        let t = ((self.tex_t.val + 0x8000) >> 16) as u8;
+        let s = (self.tex_s.val >> 16).clamp(0, 0xFF) as u8;
+        let t = (self.tex_t.val >> 16).clamp(0, 0xFF) as u8;
         TexCoord { s, t }
     }
 

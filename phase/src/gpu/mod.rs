@@ -459,6 +459,8 @@ impl GPU {
         self.status.set(GPUStatus::TexDisable, test_bit!(param, 11));
 
         // TODO: x-flip and y-flip
+        let _x_flip = test_bit!(param, 12);
+        let _y_flip = test_bit!(param, 13);
 
         GP0Command::DrawMode(self.status)
     }

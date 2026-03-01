@@ -750,6 +750,8 @@ impl Color {
         }
     }
 
+    /// Convert to R5G5B5 for drawing to display.
+    /// Mask will be stored in the top bit.
     fn to_rgb15(&self) -> u16 {
         let r = (self.r >> 3) as u16;
         let g = (self.g >> 3) as u16;
