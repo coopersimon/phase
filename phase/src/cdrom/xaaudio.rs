@@ -216,7 +216,7 @@ impl XAAudio {
         }
     }
 
-    fn decode_8bit_samples(&mut self, buffer: &[u8], stereo: bool) {
+    fn decode_8bit_samples(&mut self, _buffer: &[u8], _stereo: bool) {
         unimplemented!("8bit audio")
     }
 

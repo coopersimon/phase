@@ -335,7 +335,6 @@ impl PeripheralPort {
         self.status.remove(JoypadStatus::TXReady1);
         let Some(data_in) = self.in_fifo.pop_front() else {
             panic!("no data to process");
-            return;
         };
         //println!("Peripheral in: {:X} (state: {:?}) (port 2: {})", data_in, self.transfer_mode, self.control.contains(JoypadControl::SlotSelect));
         self.transfer_active = !self.in_fifo.is_empty();

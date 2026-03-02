@@ -23,6 +23,7 @@ const DISC_BUFFER_SIZE: u64 = 75 * SECTOR_SIZE;
 struct Track {
     num:        u8,
     file:       File,
+    #[allow(dead_code)]
     indices:    Vec<DriveLoc>,
     start_pos:  DriveLoc,
     end_pos:    DriveLoc,

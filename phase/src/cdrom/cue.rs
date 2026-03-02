@@ -90,6 +90,7 @@ impl CueFile {
 pub struct Track {
     pub num: usize,
     pub file_name: String,
+    #[allow(dead_code)]
     pub track_type: TrackType,
     pub indices: Vec<Index>,
 }
@@ -100,6 +101,7 @@ pub enum TrackType {
 }
 
 pub struct Index {
+    #[allow(dead_code)]
     pub num: usize,
     pub start: DriveLoc,
 }
