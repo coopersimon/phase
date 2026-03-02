@@ -8,7 +8,7 @@ Below is a list of selected games and their status.
 
 - Ape Escape: Mostly OK, some missing polys, sound is a bit off
 - Boku no Natsuyasumi: Mostly OK
-- Castlevania: Symphony of the Night: Titles ok, in-game UI is black, characters appear incorrectly lit
+- Castlevania: Symphony of the Night: Mostly OK
 - Chrono Cross: Mostly OK, some flickering, title screen has some issues
 - Chrono Trigger: Mostly OK
 - Crash Bandicoot: Mostly ok

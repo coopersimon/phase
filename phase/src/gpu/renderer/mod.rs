@@ -56,13 +56,13 @@ pub enum GP0Command {
     DrawTexTri{params: [u32; 6], transparent: bool},
     DrawTexBlendTri{params: [u32; 7], transparent: bool},
     DrawShadedTri{params: [u32; 6], transparent: bool},
-    DrawTexShadedTri{params: [u32; 9], transparent: bool},
+    DrawTexShadedTri{params: [u32; 9], transparent: bool, use_shading: bool},
 
     DrawQuad{params: [u32; 5], transparent: bool},
     DrawTexQuad{params: [u32; 8], transparent: bool},
     DrawTexBlendQuad{params: [u32; 9], transparent: bool},
     DrawShadedQuad{params: [u32; 8], transparent: bool},
-    DrawTexShadedQuad{params: [u32; 12], transparent: bool},
+    DrawTexShadedQuad{params: [u32; 12], transparent: bool, use_shading: bool},
 
     DrawLine{params: [u32; 3], transparent: bool},
     DrawShadedLine{params: [u32; 4], transparent: bool},
@@ -146,13 +146,13 @@ impl Renderer {
             GP0(DrawTexTri{params, transparent})        => self.draw_textured_tri(&params, transparent),
             GP0(DrawTexBlendTri{params, transparent})   => self.draw_textured_blended_tri(&params, transparent),
             GP0(DrawShadedTri{params, transparent})     => self.draw_shaded_tri(&params, transparent),
-            GP0(DrawTexShadedTri{params, transparent})  => self.draw_textured_shaded_tri(&params, transparent),
+            GP0(DrawTexShadedTri{params, transparent, use_shading}) => self.draw_textured_shaded_tri(&params, transparent, use_shading),
 
             GP0(DrawQuad{params, transparent})          => self.draw_quad(&params, transparent),
             GP0(DrawTexQuad{params, transparent})       => self.draw_textured_quad(&params, transparent),
             GP0(DrawTexBlendQuad{params, transparent})  => self.draw_textured_blended_quad(&params, transparent),
             GP0(DrawShadedQuad{params, transparent})    => self.draw_shaded_quad(&params, transparent),
-            GP0(DrawTexShadedQuad{params, transparent}) => self.draw_textured_shaded_quad(&params, transparent),
+            GP0(DrawTexShadedQuad{params, transparent, use_shading}) => self.draw_textured_shaded_quad(&params, transparent, use_shading),
 
             GP0(DrawLine{params, transparent})          => self.draw_line(&params, transparent),
             GP0(DrawShadedLine{params, transparent})    => self.draw_shaded_line(&params, transparent),
@@ -321,14 +321,14 @@ impl Renderer {
         self.renderer.draw_triangle_shaded(&vertices, transparent);
     }
 
-    fn draw_textured_shaded_tri(&mut self, params: &[u32; 9], transparent: bool) {
-        let rgb_1 = params[0];
+    fn draw_textured_shaded_tri(&mut self, params: &[u32; 9], transparent: bool, use_shading: bool) {
+        let rgb_1 = if use_shading {params[0]} else {0x00808080};
         let vertex_1 = params[1];
         let texcoord_1 = params[2];
-        let rgb_2 = params[3];
+        let rgb_2 = if use_shading {params[3]} else {0x00808080};
         let vertex_2 = params[4];
         let texcoord_2 = params[5];
-        let rgb_3 = params[6];
+        let rgb_3 = if use_shading {params[6]} else {0x00808080};
         let vertex_3 = params[7];
         let texcoord_3 = params[8];
         let vertices = [
@@ -417,17 +417,17 @@ impl Renderer {
         self.renderer.draw_triangle_shaded(&vertices[1..4], transparent);
     }
 
-    fn draw_textured_shaded_quad(&mut self, params: &[u32; 12], transparent: bool) {
-        let rgb_1 = params[0];
+    fn draw_textured_shaded_quad(&mut self, params: &[u32; 12], transparent: bool, use_shading: bool) {
+        let rgb_1 = if use_shading {params[0]} else {0x00808080};
         let vertex_1 = params[1];
         let texcoord_1 = params[2];
-        let rgb_2 = params[3];
+        let rgb_2 = if use_shading {params[3]} else {0x00808080};
         let vertex_2 = params[4];
         let texcoord_2 = params[5];
-        let rgb_3 = params[6];
+        let rgb_3 = if use_shading {params[6]} else {0x00808080};
         let vertex_3 = params[7];
         let texcoord_3 = params[8];
-        let rgb_4 = params[9];
+        let rgb_4 = if use_shading {params[9]} else {0x00808080};
         let vertex_4 = params[10];
         let texcoord_4 = params[11];
         let vertices = [

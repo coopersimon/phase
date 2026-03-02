@@ -254,13 +254,17 @@ impl GPU {
 
                 0x30 | 0x31 => Some(DrawShadedTri{params: std::array::from_fn(|n| self.command_data[n]), transparent: false}),
                 0x32 | 0x33 => Some(DrawShadedTri{params: std::array::from_fn(|n| self.command_data[n]), transparent: true}),
-                0x34 | 0x35 => Some(DrawTexShadedTri{params: std::array::from_fn(|n| self.command_data[n]), transparent: false}),
-                0x36 | 0x37 => Some(DrawTexShadedTri{params: std::array::from_fn(|n| self.command_data[n]), transparent: true}),
+                0x34 => Some(DrawTexShadedTri{params: std::array::from_fn(|n| self.command_data[n]), transparent: false, use_shading: true}),
+                0x35 => Some(DrawTexShadedTri{params: std::array::from_fn(|n| self.command_data[n]), transparent: false, use_shading: false}),
+                0x36 => Some(DrawTexShadedTri{params: std::array::from_fn(|n| self.command_data[n]), transparent: true, use_shading: true}),
+                0x37 => Some(DrawTexShadedTri{params: std::array::from_fn(|n| self.command_data[n]), transparent: true, use_shading: false}),
 
                 0x38 | 0x39 => Some(DrawShadedQuad{params: std::array::from_fn(|n| self.command_data[n]), transparent: false}),
                 0x3A | 0x3B => Some(DrawShadedQuad{params: std::array::from_fn(|n| self.command_data[n]), transparent: true}),
-                0x3C | 0x3D => Some(DrawTexShadedQuad{params: std::array::from_fn(|n| self.command_data[n]), transparent: false}),
-                0x3E | 0x3F => Some(DrawTexShadedQuad{params: std::array::from_fn(|n| self.command_data[n]), transparent: true}),
+                0x3C => Some(DrawTexShadedQuad{params: std::array::from_fn(|n| self.command_data[n]), transparent: false, use_shading: true}),
+                0x3D => Some(DrawTexShadedQuad{params: std::array::from_fn(|n| self.command_data[n]), transparent: false, use_shading: false}),
+                0x3E => Some(DrawTexShadedQuad{params: std::array::from_fn(|n| self.command_data[n]), transparent: true, use_shading: true}),
+                0x3F => Some(DrawTexShadedQuad{params: std::array::from_fn(|n| self.command_data[n]), transparent: true, use_shading: false}),
 
                 0x40 | 0x41 => Some(DrawLine{params: std::array::from_fn(|n| self.command_data[n]), transparent: false}),
                 0x42 => Some(DrawLine{params: std::array::from_fn(|n| self.command_data[n]), transparent: true}),
