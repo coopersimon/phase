@@ -235,7 +235,7 @@ enum Command {
 }
 
 impl Command {
-    fn decode(data: u32) -> Command {
+    fn decode(data: u32) -> Option<Command> {
         use Command::*;
         let command = data >> 29;
         match command {
@@ -247,11 +247,13 @@ impl Command {
                     0b11 => OutputDepth::RGB15,
                     _ => unreachable!()
                 };
-                DecodeMacroblock{output_depth, signed: test_bit!(data, 26), set_bit_15: test_bit!(data, 25)}
+                let signed = test_bit!(data, 26);
+                let set_bit_15 = test_bit!(data, 25);
+                Some(DecodeMacroblock{output_depth, signed, set_bit_15})
             },
-            2 => SetQuantTable { use_color: test_bit!(data, 0) },
-            3 => SetScaleTable,
-            _ => panic!("unrecognised MDEC command"),
+            2 => Some(SetQuantTable { use_color: test_bit!(data, 0) }),
+            3 => Some(SetScaleTable),
+            _ => None,
         }
     }
 }
@@ -321,19 +323,20 @@ impl MDEC {
     }
 
     fn start_command(&mut self, data: u32) {
-        let command = Command::decode(data);
-        self.param_words_remaining = match command {
-            Command::DecodeMacroblock {..} => (data & 0xFFFF) as u16,
-            Command::SetQuantTable { use_color: true } => 32,
-            Command::SetQuantTable { use_color: false } => 16,
-            Command::SetScaleTable => 32,
-        };
-        self.command = Some(command);
-        self.status.insert(Status::CommandBusy | Status::Mono);
-        if self.data_in_enable {
-            self.status.insert(Status::DataInReq);
+        if let Some(command) = Command::decode(data) {
+            self.param_words_remaining = match command {
+                Command::DecodeMacroblock {..} => (data & 0xFFFF) as u16,
+                Command::SetQuantTable { use_color: true } => 32,
+                Command::SetQuantTable { use_color: false } => 16,
+                Command::SetScaleTable => 32,
+            };
+            self.command = Some(command);
+            self.status.insert(Status::CommandBusy | Status::Mono);
+            if self.data_in_enable {
+                self.status.insert(Status::DataInReq);
+            }
+            self.current_block = Block::Cr;
         }
-        self.current_block = Block::Cr;
     }
 
     /// This function will be called repeatedly for every input data chunk.

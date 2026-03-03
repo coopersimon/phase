@@ -37,7 +37,7 @@ Below is a list of selected games and their status.
 - Resident Evil 2: Mostly OK
 - Resident Evil 3: Intro cutscene loses sound, VRAM write crash when gameplay begins
 - Silent Hill: Uses multitap memcard then locks up
-- Sim City 2000: Does strange stuff with MDEC, does not boot.
+- Sim City 2000: Starts up OK, music sounds weird and some graphical artifacts on map
 - Spiderman: Mostly OK
 - Spyro the Dragon: Mostly OK
 - Suikoden: Mostly ok, flickering at top of screen.
