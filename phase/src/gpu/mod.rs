@@ -90,11 +90,7 @@ impl GPU {
 
     /// Check if DMA is ready.
     pub fn dma_ready(&mut self) -> bool {
-        if self.status.contains(GPUStatus::DMARequest) {
-            true
-        } else {
-            false
-        }
+        self.status.contains(GPUStatus::DMARequest)
     }
 
     pub fn dma_cmd_ready(&self) -> bool {
@@ -446,7 +442,8 @@ impl GPU {
     }
 }
 
-const POLY_LINE_TERM: u32 = 0x5555_5555;
+const POLY_LINE_MASK: u32 = 0xF000_F000;
+const POLY_LINE_TERM: u32 = 0x5000_5000;
 
 // GP0 commands
 // Mostly as these are drawing commands, they are just dispatched to the
@@ -505,7 +502,7 @@ impl GPU {
             self.pending_command_words = 1;
             Some(GP0Command::DrawLine { params: std::array::from_fn(|n| self.command_data[n]), transparent })
         } else {
-            if self.command_data[0] == POLY_LINE_TERM {
+            if (self.command_data[0] & POLY_LINE_MASK) == POLY_LINE_TERM {
                 self.poly_line_buf.clear();
                 None
             } else {
@@ -532,7 +529,7 @@ impl GPU {
         } else {
             //self.status.remove(GPUStatus::CommandReady);
             if self.poly_line_buf.len() == 2 {
-                if self.command_data[0] == POLY_LINE_TERM {
+                if (self.command_data[0] & POLY_LINE_MASK) == POLY_LINE_TERM {
                     self.poly_line_buf.clear();
                 } else {
                     self.poly_line_buf.push(self.command_data[0]);

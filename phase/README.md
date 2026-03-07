@@ -26,7 +26,7 @@ Below is a list of selected games and their status.
 - Front Mission 3: Mostly OK
 - Grand Theft Auto 2: Mostly OK
 - Gran Turismo: Mostly OK
-- Gran Turismo 2: Loads up OK, breaks in rally mode with line drawing
+- Gran Turismo 2: Mostly OK, eventually crashes in drive mode trying GPU command FF
 - Legend of Dragoon: Mostly OK (?)
 - Medal of Honor: Mostly OK
 - Metal Gear Solid: Mostly OK, some flickering
