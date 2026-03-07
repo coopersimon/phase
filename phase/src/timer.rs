@@ -108,6 +108,8 @@ impl MemInterface for Timers {
             0x1F801124 => self.timers[2].read_mode(),
             0x1F801128 => self.timers[2].target,
 
+            0x1F801130 => self.timers[2].counter, // For GT2
+
             _ => panic!("invalid timer addr {:X}", addr),
         };
         //println!("timer read {:X} from {:X}", data, addr);

@@ -305,7 +305,7 @@ impl MemBus {
             0x1F80_1060..=0x1F80_1063 => &mut self.control,
             0x1F80_1070..=0x1F80_1077 => &mut self.interrupts,
             0x1F80_1080..=0x1F80_10FF => &mut self.dma,
-            0x1F80_1100..=0x1F80_1129 => &mut self.timers,
+            0x1F80_1100..=0x1F80_113F => &mut self.timers,
             0x1F80_1800..=0x1F80_1807 => &mut self.cdrom,
             0x1F80_1810..=0x1F80_1817 => &mut self.gpu,
             0x1F80_1820..=0x1F80_1827 => &mut self.mdec,
