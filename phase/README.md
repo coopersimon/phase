@@ -14,6 +14,7 @@ Below is a list of selected games and their status.
 - Crash Bandicoot: Mostly ok
 - Crash Bandicoot 2: Mostly ok
 - Crash Bandicoot 3: Mostly ok
+- Crash Bash: Mostly OK, reverb on audio sounds a bit strange
 - Crash Team Racing: Mostly OK, some seams and occasional flickering (depth issue?) also image is not centred, large black bar at bottom.
 - Diablo: Mostly OK
 - Dino Crisis: Shows first screen then locks up
@@ -31,11 +32,11 @@ Below is a list of selected games and their status.
 - Medal of Honor: Mostly OK
 - Metal Gear Solid: Mostly OK, some flickering
 - Metal Slug X: Shows some opening screens then locks up.
-- PaRappa the Rapper: Mostly OK, some audio is a bit quiet
+- PaRappa the Rapper: Cutscenes don't play - this did work at some point but seemingly only with local changes
 - Parasite Eve: Mostly OK (?)
 - Resident Evil: Mostly OK
 - Resident Evil 2: Mostly OK
-- Resident Evil 3: Intro cutscene loses sound, VRAM write crash when gameplay begins
+- Resident Evil 3: Mostly OK
 - Silent Hill: Uses multitap memcard then locks up
 - Sim City 2000: Starts up OK, music sounds weird and some graphical artifacts on map
 - Spiderman: Mostly OK
@@ -49,6 +50,7 @@ Below is a list of selected games and their status.
 - Twisted Metal: Mostly OK: gameplay looks a little weird maybe, eventually uses GP0 command 0x08BD0040 (???)
 - Vagrant Story: Mostly ok - looks like outline of map in bottom right of gameplay blends with itself
 - Wild ARMS: Mostly ok!
+- Wild ARMS 2: Mostly OK
 - WipEout: Mostly OK!
 
 ## TODO list

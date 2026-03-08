@@ -125,7 +125,8 @@ impl RendererImpl for SoftwareRenderer {
         for y in 0..size.height {
             let src_begin = y as usize * size.width as usize;
             let src_end = src_begin + (size.width as usize);
-            let addr_base = (to.y + y as i16) as usize * 1024;
+            let dest_y = ((to.y + y as i16) as usize) % 512;
+            let addr_base = dest_y * 1024;
             for (x, pixel) in data_in[src_begin..src_end].iter().cloned().enumerate() {
                 let x_addr = ((to.x as usize) + x) % 1024;
                 let addr = addr_base + x_addr;
